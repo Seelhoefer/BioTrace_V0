@@ -43,15 +43,15 @@ def manager(db: DatabaseManager, qapp) -> SessionManager:
 
 
 class TestSensorSelection:
-    def test_mock_sensor_used_when_use_pico_ecg_is_false(
+    def test_disabled_ecg_sensor_used_when_use_pico_ecg_is_false(
         self, db: DatabaseManager, monkeypatch
     ) -> None:
-        """With USE_PICO_ECG=False, SessionManager uses MockHRVSensor."""
+        """With USE_PICO_ECG=False, SessionManager uses DisabledECGSensor."""
         monkeypatch.setattr("app.core.session.USE_PICO_ECG", False)
         from app.core.session import SessionManager as SM
         mgr = SM(db)
-        from app.hardware.mock_sensors import MockHRVSensor
-        assert isinstance(mgr._hrv_sensor, MockHRVSensor)
+        from app.hardware.disabled_sensors import DisabledECGSensor
+        assert isinstance(mgr._hrv_sensor, DisabledECGSensor)
 
     def test_pico_sensor_used_when_use_pico_ecg_is_true(
         self, db: DatabaseManager, monkeypatch

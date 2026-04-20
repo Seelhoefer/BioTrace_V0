@@ -92,7 +92,32 @@ def test_dashboard_stress_card_shows_session_average(
     view.show()
     qapp.processEvents()
 
-    assert view._stress_gauge is not None
-    assert view._stress_gauge._center_text == "1.5"
+    assert view._stress_value_label is not None
+    assert view._stress_value_label.text() == "1.5/session"
+
+    assert view._workload_value_label is not None
+    assert view._workload_value_label.text() == "1.0/session"
+
+    view.close()
+
+
+def test_dashboard_high_cognitive_load_zero_without_pupil_samples(
+    db: DatabaseManager, qapp: QApplication
+) -> None:
+    """Average high cognitive load events is 0.0 when no pupil PDI data exists."""
+    conn = db.get_connection()
+    start = datetime(2026, 1, 1, 10, 0, 0)
+    conn.execute(
+        "INSERT INTO sessions (started_at, ended_at, error_count) VALUES (?, ?, ?)",
+        (start.isoformat(sep=" "), (start + timedelta(minutes=5)).isoformat(sep=" "), 0),
+    )
+    conn.commit()
+
+    view = DashboardView(db=db)
+    view.show()
+    qapp.processEvents()
+
+    assert view._workload_value_label is not None
+    assert view._workload_value_label.text() == "0.0/session"
 
     view.close()

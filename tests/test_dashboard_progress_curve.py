@@ -115,14 +115,15 @@ def test_progress_chart_single_valid_session_shows_single_point(
     view.close()
 
 
-def test_progress_chart_uses_error_rate_per_minute_for_learning_input(
+def test_progress_chart_prefers_shorter_session_with_same_wall_contacts(
     db: DatabaseManager, qapp: QApplication
 ) -> None:
-    """Same error count but shorter duration should score worse on progress."""
+    """Same wall contacts but shorter duration → lower effective_time → better score.
+
+    The learning curve uses ``duration_s + error_count * WALL_CONTACT_PENALTY_S``,
+    not errors-per-minute.
+    """
     start = datetime(2026, 3, 1, 9, 0, 0)
-    # Same wall contacts, different durations -> different per-minute rates.
-    # Session 1: 6 / 3 min = 2.0/min (better)
-    # Session 2: 6 / 1 min = 6.0/min (worse)
     _insert_session(db, start, 3, 6)
     _insert_session(db, start + timedelta(days=1), 1, 6)
 
@@ -133,8 +134,8 @@ def test_progress_chart_uses_error_rate_per_minute_for_learning_input(
     _, actual_values, _, labels = view._build_chart_series()
 
     assert labels == ["S1", "S2"]
-    assert actual_values[0] == pytest.approx(100.0, abs=0.2)
-    assert actual_values[1] == pytest.approx(0.0, abs=0.2)
-    assert actual_values[0] > actual_values[1]
+    assert actual_values[0] == pytest.approx(0.0, abs=0.2)
+    assert actual_values[1] == pytest.approx(100.0, abs=0.2)
+    assert actual_values[0] < actual_values[1]
 
     view.close()

@@ -33,10 +33,10 @@ def test_compute_error_rate_per_minute() -> None:
     assert rate == pytest.approx(2.0)
 
 
-def test_dashboard_error_gauge_shows_average_errors_per_session(
+def test_dashboard_error_card_shows_average_errors_per_session(
     db: DatabaseManager, qapp: QApplication
 ) -> None:
-    """The KPI should display average wall-contact count per session."""
+    """The KPI card should display average wall-contact count per session."""
     conn = db.get_connection()
     start_a = datetime(2026, 1, 1, 10, 0, 0)
     start_b = datetime(2026, 1, 2, 10, 0, 0)
@@ -55,8 +55,8 @@ def test_dashboard_error_gauge_shows_average_errors_per_session(
     view.show()
     qapp.processEvents()
 
-    assert view._error_gauge is not None
-    assert view._error_gauge._center_text == "3.5/session"
+    assert view._error_value_label is not None
+    assert view._error_value_label.text() == "3.5/session"
 
     view.close()
 

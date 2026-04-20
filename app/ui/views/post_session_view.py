@@ -69,7 +69,7 @@ class PostSessionView(QWidget):
     """Individual session dashboard shown after a session ends or when opened from history.
 
     Shows session date/title, summary metric cards (session duration,
-    errors, error rate/min, stress events, high workload events), a biometric timeline chart with series toggle, and a video
+    errors, stress events, high workload events), a biometric timeline chart with series toggle, and a video
     playback area.
 
     User flow
@@ -174,7 +174,7 @@ class PostSessionView(QWidget):
         )
 
         # ── Video Recording ────────────────────────────────────────────
-        self._video_player.load(video_path)
+        self._video_player.load(video_path, session_duration_s=duration_s)
 
         if (
             duration_s is not None
@@ -376,7 +376,6 @@ class PostSessionView(QWidget):
 
         self._add_metric_card(row, key="duration", title="SESSION DURATION")
         self._add_metric_card(row, key="errors", title="NUMBER OF ERRORS")
-        self._add_metric_card(row, key="error_rate_per_min", title="ERROR RATE / MIN")
         self._add_metric_card(row, key="stress_events", title="STRESS EVENTS")
         self._add_metric_card(row, key="workload_events", title="HIGH WORKLOAD EVENTS")
 
@@ -406,7 +405,6 @@ class PostSessionView(QWidget):
         icon_by_key = {
             "duration": ("ph.timer-fill", COLOR_PRIMARY),
             "errors": ("ph.warning-circle-fill", COLOR_DANGER),
-            "error_rate_per_min": ("ph.speedometer-fill", COLOR_DANGER),
             "stress_events": ("ph.heartbeat-fill", COLOR_PRIMARY),
             "workload_events": ("ph.brain-fill", COLOR_WARNING),
         }
@@ -574,16 +572,6 @@ class PostSessionView(QWidget):
             return f"{h}:{m:02d}:{s:02d}"
         return f"{m}:{s:02d}"
 
-    @staticmethod
-    def _compute_error_rate_per_minute(
-        error_count: int | None,
-        duration_s: int | None,
-    ) -> float | None:
-        """Return wall-contact frequency as errors/minute for one session."""
-        if error_count is None or duration_s is None or duration_s <= 0:
-            return None
-        return float(max(0, error_count)) / (float(duration_s) / 60.0)
-
     def _query_stress_event_counts(self, session_id: int) -> tuple[int, int]:
         """Return (stress_events, severe_events) using crossing-based RMSSD logic."""
         conn = self._db.get_connection()
@@ -694,7 +682,7 @@ class PostSessionView(QWidget):
             subtitle_label.setVisible(bool(subtitle))
 
     def _set_metric_cards(self, session_id: int, duration_s: int | None, error_count: int | None) -> None:
-        """Populate summary cards with duration/error/stress/workload event counts."""
+        """Populate summary cards with duration, errors, stress, and workload counts."""
         self._set_card_value(
             key="duration",
             value="—" if duration_s is None else self._format_duration(duration_s),
@@ -702,11 +690,6 @@ class PostSessionView(QWidget):
 
         err_val = int(error_count) if error_count is not None else 0
         self._set_card_value(key="errors", value=str(err_val))
-        error_rate_per_min = self._compute_error_rate_per_minute(error_count, duration_s)
-        self._set_card_value(
-            key="error_rate_per_min",
-            value="—" if error_rate_per_min is None else f"{error_rate_per_min:.1f}/min",
-        )
 
         stress_events, _severe_events = self._query_stress_event_counts(session_id)
         self._set_card_value(

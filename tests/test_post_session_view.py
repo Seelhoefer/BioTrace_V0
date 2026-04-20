@@ -109,7 +109,6 @@ class TestPostSessionMetrics:
 
         assert view._metric_value_labels["duration"].text() == "2:05"
         assert view._metric_value_labels["errors"].text() == "3"
-        assert view._metric_value_labels["error_rate_per_min"].text() == "1.4/min"
         assert view._metric_value_labels["stress_events"].text() == "2"
         assert view._metric_subtitle_labels["stress_events"].text() == ""
         assert view._metric_subtitle_labels["stress_events"].isHidden()

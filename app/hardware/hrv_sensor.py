@@ -1,12 +1,9 @@
 """Stub hardware drivers for the real HRV sensor and eye tracker.
 
 These files define the class interface that must be filled in once the physical
-devices are available (Phase 6 of the roadmap). Until then, use
-:class:`app.hardware.mock_sensors.MockHRVSensor` instead.
-
-The class inherits :class:`~app.hardware.base_sensor.BaseSensor` and declares
-the same signal as the mock, so the rest of the system is completely unaffected
-when the real driver replaces the mock.
+devices are available (Phase 6 of the roadmap). Production ECG uses
+:class:`~app.hardware.pico_ecg_sensor.PicoECGSensor`; when ``USE_PICO_ECG`` is
+false, :class:`~app.hardware.disabled_sensors.DisabledECGSensor` is used instead.
 """
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -21,8 +18,8 @@ class HRVSensor(BaseSensor):
     """Real HRV sensor driver (serial / USB microcontroller).
 
     .. note::
-        Not yet implemented. Use :class:`~app.hardware.mock_sensors.MockHRVSensor`
-        during development.
+        Not yet implemented. Use :class:`~app.hardware.pico_ecg_sensor.PicoECGSensor`
+        for USB ECG.
 
     Signals:
         raw_ecg_sample_received (float, float):
@@ -38,11 +35,11 @@ class HRVSensor(BaseSensor):
     def start(self) -> None:
         """Open serial connection and begin streaming raw ECG samples."""
         raise NotImplementedError(
-            "HRVSensor is not implemented yet. Use MockHRVSensor for development."
+            "HRVSensor is not implemented yet. Use PicoECGSensor for USB ECG."
         )
 
     def stop(self) -> None:
         """Close serial connection."""
         raise NotImplementedError(
-            "HRVSensor is not implemented yet. Use MockHRVSensor for development."
+            "HRVSensor is not implemented yet. Use PicoECGSensor for USB ECG."
         )

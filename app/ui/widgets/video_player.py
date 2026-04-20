@@ -65,10 +65,16 @@ class VideoPlayer(QWidget):
 
         self._build_ui()
 
-    def load(self, file_path: str | None) -> None:
+    def load(self, file_path: str | None, session_duration_s: float | None = None) -> None:
         """Open a video file for playback.
 
-        If path is None or file is missing, shows a placeholder.
+        Args:
+            file_path: Path to the MP4 file, or None.
+            session_duration_s: True wall-clock session duration in seconds
+                (from the database).  When provided the effective playback FPS
+                is derived from ``frame_count / session_duration_s`` so that
+                playback matches real time even when the camera delivered fewer
+                frames than the declared encoder FPS.
         """
         self.stop()
         if self._cap:
@@ -87,12 +93,17 @@ class VideoPlayer(QWidget):
             self._controls_container.hide()
             return
 
-        # Duration / playback rate: BioTrace encodes with VIDEO_RECORDING_FPS_FALLBACK.
-        # OpenCV often reports wrong CAP_PROP_FPS for mp4v (e.g. 60 or 15), which makes
-        # total duration and QTimer cadence disagree with real session time → "double speed".
         count = float(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self._source_fps = float(VIDEO_RECORDING_FPS_FALLBACK)
         self._frame_count = max(0, int(round(count)))
+
+        # Derive the effective playback FPS from the true session duration so
+        # that frame_count / fps == wall-clock time.  Falls back to the
+        # declared encoder FPS when no duration is available.
+        if session_duration_s and session_duration_s > 0 and self._frame_count > 0:
+            self._source_fps = self._frame_count / session_duration_s
+        else:
+            self._source_fps = float(VIDEO_RECORDING_FPS_FALLBACK)
+
         if self._frame_count > 0:
             self._duration_ms = (self._frame_count / self._source_fps) * 1000.0
         else:

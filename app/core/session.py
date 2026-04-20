@@ -24,7 +24,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from app.core.data_store import DataStore
 from app.core.metrics import average_pupil_diameter
-from app.hardware.mock_sensors import MockHRVSensor, MockEyeTracker
+from app.hardware.disabled_sensors import DisabledECGSensor, DisabledEyeTracker
 from app.hardware.error_counter import ErrorCounter
 from app.processing.hrv_processor import HRVProcessor, compute_window_hrv_dict
 from app.utils.config import (
@@ -132,13 +132,13 @@ class SessionManager(QObject):
             from app.hardware.pico_ecg_sensor import PicoECGSensor
             self._hrv_sensor = PicoECGSensor(port=None, baud=PICO_ECG_BAUD, parent=self)
         else:
-            self._hrv_sensor = MockHRVSensor(self)
+            self._hrv_sensor = DisabledECGSensor(self)
 
         if USE_EYE_TRACKER:
             from app.hardware.eye_tracker import EyeTrackerSensor
             self._eye_tracker = EyeTrackerSensor(parent=self)
         else:
-            self._eye_tracker = MockEyeTracker(self)
+            self._eye_tracker = DisabledEyeTracker(self)
 
         self._error_counter = ErrorCounter()  # stub for Phase 6b hardware
 

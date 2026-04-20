@@ -3,19 +3,20 @@
 The layout is split into three areas:
 1) Header with status actions and start button
 2) Top content row with progress chart and personal best cards
-3) Bottom row with three circular KPI cards
+3) Bottom row with three KPI summary cards (icon + value)
 4) Session Trend Analysis chart
 
 All colours and font sizes are sourced exclusively from ``app.ui.theme``.
 No hex literals or magic pixel values appear in this file.
 """
 
+from collections import deque
 from datetime import datetime, timedelta
 import sqlite3
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QEvent, QObject, Qt, QSize, pyqtSignal, QThread
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -32,7 +33,14 @@ from PyQt6.QtWidgets import (
 from app.storage.database import DatabaseManager
 from app.storage.session_repository import SessionRepository
 from app.analytics.learning_curve import fit_schmettow, predict_at_trial
-from app.utils.config import LC_MIN_SESSIONS, SCORE_MAX
+from app.utils.config import (
+    LC_MIN_SESSIONS,
+    SCORE_MAX,
+    WALL_CONTACT_PENALTY_S,
+    WORKLOAD_PUPIL_ROLLING_SECONDS,
+    WORKLOAD_PUPIL_SMOOTHING_SECONDS,
+    WORKLOAD_THRESHOLD_FACTOR,
+)
 from app.ui.theme import (
     COLOR_BACKGROUND,
     COLOR_BORDER,
@@ -43,7 +51,6 @@ from app.ui.theme import (
     COLOR_FONT,
     COLOR_FONT_MUTED,
     COLOR_PRIMARY,
-    COLOR_PRIMARY_SUBTLE,
     COLOR_SUCCESS,
     COLOR_WARNING,
     COLOR_WARNING_BG,
@@ -61,12 +68,35 @@ from app.ui.theme import (
     get_icon,
 )
 from app.ui.widgets.level_bar import LevelBar
-from app.ui.widgets.donut_gauge import DonutGauge
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 CARD_TITLE_FONT_SIZE = FONT_HEADING_2 - 4
+
+
+class _PersonalBestRowFrame(QFrame):
+    """One personal-best row; emits ``row_clicked`` with session id when set."""
+
+    row_clicked = pyqtSignal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._session_id: int | None = None
+
+    def set_session_id(self, session_id: int | None) -> None:
+        self._session_id = session_id
+        if session_id is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Open session details")
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setToolTip("")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._session_id is not None:
+            self.row_clicked.emit(self._session_id)
+        super().mousePressEvent(event)
 TOP_ROW_CARD_MIN_HEIGHT = 432
 PROGRESS_CHART_MIN_HEIGHT = 304
 
@@ -90,10 +120,12 @@ class DashboardView(QWidget):
 
         self._sessions_count_label: QLabel | None = None
         self._best_time_rows: list[tuple[QLabel, QLabel, QLabel]] = []
+        self._best_row_frames: list[_PersonalBestRowFrame] = []
+        self._personal_best_placeholder: QLabel | None = None
 
-        self._stress_gauge: DonutGauge | None = None
-        self._error_gauge: DonutGauge | None = None
-        self._load_gauge: DonutGauge | None = None
+        self._stress_value_label: QLabel | None = None
+        self._error_value_label: QLabel | None = None
+        self._workload_value_label: QLabel | None = None
 
         # Per-session biometric stats cached on each refresh() call.
         # Keys are session IDs; see _load_biometric_stats() for the dict schema.
@@ -167,8 +199,24 @@ class DashboardView(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(GRID_GUTTER)
         for kwargs in (
-              dict(title="Ø Stress Events", accent=COLOR_PRIMARY, track=COLOR_PRIMARY_SUBTLE, key="stress"),
-              dict(title="Ø Error Rate", accent=COLOR_DANGER, track=COLOR_DANGER_BG, key="error"),
+            dict(
+                title="Ø Stress Events",
+                accent=COLOR_PRIMARY,
+                key="stress",
+                icon_name="ph.heartbeat-fill",
+            ),
+            dict(
+                title="Ø Error Rate",
+                accent=COLOR_DANGER,
+                key="error",
+                icon_name="ph.warning-circle-fill",
+            ),
+            dict(
+                title="Ø High Cognitive Load Events",
+                accent=COLOR_WARNING,
+                key="workload",
+                icon_name="ph.brain-fill",
+            ),
         ):
             card = self._make_metric_card(**kwargs)
             card.setMinimumHeight(300)
@@ -230,7 +278,7 @@ class DashboardView(QWidget):
         return header
 
     def _make_progress_card(self) -> QFrame:
-        """Left card: progress line chart with sessions count."""
+        """Left card: combined learning curve (time + wall contact penalty)."""
         card = self._make_card()
         card.setStyleSheet(
             f"""
@@ -248,7 +296,7 @@ class DashboardView(QWidget):
         header = QHBoxLayout()
         left = QVBoxLayout()
 
-        title = QLabel("Your Progress")
+        title = QLabel("Learning Curve")
         title.setStyleSheet(
             f"color: {COLOR_FONT}; font-size: {CARD_TITLE_FONT_SIZE}px; font-weight: 700;"
         )
@@ -287,7 +335,7 @@ class DashboardView(QWidget):
         self._progress_plot.getAxis("left").setPen(pg.mkPen(COLOR_CHART_AXIS, width=0.8))
         self._progress_plot.getAxis("bottom").setTextPen(pg.mkPen(COLOR_FONT_MUTED, width=1))
         self._progress_plot.getAxis("left").setTextPen(pg.mkPen(COLOR_FONT_MUTED, width=1))
-        self._progress_plot.getAxis("left").setLabel("Normalized Performance (%)", color=COLOR_FONT_MUTED)
+        self._progress_plot.getAxis("left").setLabel("Performance", color=COLOR_FONT_MUTED)
         self._progress_plot.getAxis("bottom").setLabel("Sessions", color=COLOR_FONT_MUTED)
 
         estimate_pen = pg.mkPen(color=COLOR_FONT_MUTED, width=3, style=Qt.PenStyle.DashLine)
@@ -329,11 +377,41 @@ class DashboardView(QWidget):
         )
         layout.addWidget(title)
 
+        sessions_wrap = QFrame()
+        sessions_wrap.setObjectName("personal_best_sessions")
+        sessions_wrap.setStyleSheet(
+            f"""
+            QFrame#personal_best_sessions {{
+                border: 1px solid {COLOR_BORDER};
+                border-radius: {RADIUS_LG}px;
+                background-color: {COLOR_CARD};
+            }}
+            """
+        )
+        wrap_layout = QVBoxLayout(sessions_wrap)
+        wrap_layout.setContentsMargins(SPACE_2, SPACE_2, SPACE_2, SPACE_2)
+        wrap_layout.setSpacing(SPACE_2)
+
+        self._personal_best_placeholder = QLabel(
+            "No session data available yet. Start your first session to see your "
+            "personal best times here."
+        )
+        self._personal_best_placeholder.setWordWrap(True)
+        self._personal_best_placeholder.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._personal_best_placeholder.setStyleSheet(
+            f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500; "
+            f"padding: {SPACE_2}px;"
+        )
+        self._personal_best_placeholder.setVisible(False)
+        wrap_layout.addWidget(self._personal_best_placeholder)
+
         # Reset references in case the card is rebuilt.
         self._best_time_rows = []
+        self._best_row_frames = []
 
         for rank in range(1, 4):
-            row_card = QFrame()
+            row_card = _PersonalBestRowFrame()
+            row_card.row_clicked.connect(self.session_selected.emit)
             row_card.setStyleSheet(
                 f"""
                 QFrame {{
@@ -372,12 +450,19 @@ class DashboardView(QWidget):
                 f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500;"
             )
 
+            _pb_transparent = Qt.WidgetAttribute.WA_TransparentForMouseEvents
+            meta_label.setAttribute(_pb_transparent, True)
+            duration_label.setAttribute(_pb_transparent, True)
+            session_label.setAttribute(_pb_transparent, True)
+
             row_layout.addLayout(top_line)
             row_layout.addWidget(session_label)
 
             self._best_time_rows.append((meta_label, duration_label, session_label))
-            layout.addWidget(row_card)
+            self._best_row_frames.append(row_card)
+            wrap_layout.addWidget(row_card)
 
+        layout.addWidget(sessions_wrap)
         layout.addStretch(1)
         return card
 
@@ -385,19 +470,31 @@ class DashboardView(QWidget):
         self,
         title: str,
         accent: str,
-        track: str,
         key: str,
+        icon_name: str,
     ) -> QFrame:
-        """Create one of the bottom circular KPI cards."""
+        """Create a bottom KPI card with a large icon and numeric value."""
         card = self._make_card()
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(SPACE_3, SPACE_2, SPACE_3, SPACE_3)
-        card_layout.setSpacing(SPACE_1)
+        card_layout.setSpacing(SPACE_2)
 
         card_layout.addStretch(1)
-        gauge = DonutGauge(value=0.0, accent_color=accent, track_color=track, center_text="0.0", half_circle=True)
-        gauge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        card_layout.addWidget(gauge, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        icon_px = max(56, FONT_HEADING_2 * 3)
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        icon_label.setPixmap(
+            get_icon(icon_name, color=accent, size=icon_px).pixmap(QSize(icon_px, icon_px))
+        )
+        card_layout.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        value_label = QLabel("—")
+        value_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        value_label.setStyleSheet(
+            f"color: {COLOR_FONT}; font-size: {FONT_HEADING_2}px; font-weight: 700;"
+        )
+        card_layout.addWidget(value_label)
         card_layout.addStretch(1)
 
         title_label = QLabel(title)
@@ -408,13 +505,11 @@ class DashboardView(QWidget):
         card_layout.addWidget(title_label)
 
         if key == "stress":
-            self._stress_gauge = gauge
+            self._stress_value_label = value_label
         elif key == "error":
-            self._error_gauge = gauge
-            # Keep long labels like "0.0/session" clear of the semi-donut arc.
-            gauge.set_center_text_pixel_size(18)
-        else:
-            self._load_gauge = gauge
+            self._error_value_label = value_label
+        elif key == "workload":
+            self._workload_value_label = value_label
 
         return card
 
@@ -595,6 +690,19 @@ class DashboardView(QWidget):
         if not self._best_time_rows:
             return
 
+        if len(self._sessions) == 0:
+            if self._personal_best_placeholder is not None:
+                self._personal_best_placeholder.setVisible(True)
+            for row in self._best_row_frames:
+                row.setVisible(False)
+                row.set_session_id(None)
+            return
+
+        if self._personal_best_placeholder is not None:
+            self._personal_best_placeholder.setVisible(False)
+        for row in self._best_row_frames:
+            row.setVisible(True)
+
         durations: list[tuple[int, sqlite3.Row]] = []
         for session in self._sessions:
             duration_seconds = self._compute_session_duration_seconds(
@@ -607,11 +715,12 @@ class DashboardView(QWidget):
         best_three = sorted(durations, key=lambda item: item[0])[:3]
 
         for idx, (meta_label, duration_label, session_label) in enumerate(self._best_time_rows, start=1):
+            row_frame = self._best_row_frames[idx - 1]
             meta_label.setText(f"BEST SESSION #{idx}")
             if idx <= len(best_three):
                 duration_seconds, session_row = best_three[idx - 1]
                 duration_label.setText(self._format_seconds(duration_seconds))
-                
+
                 # Show name if available, otherwise date
                 name = session_row["name"] if "name" in session_row.keys() else None
                 if name:
@@ -619,27 +728,26 @@ class DashboardView(QWidget):
                 else:
                     session_date = str(session_row["started_at"]).replace("T", " ")[:10]
                     session_label.setText(f"Session {session_date}")
+                row_frame.set_session_id(int(session_row["id"]))
             else:
                 duration_label.setText("0:00")
                 session_label.setText("Session —")
+                row_frame.set_session_id(None)
 
     def _update_gauges(self) -> None:
-        """Map real biometric session data to the three bottom KPI gauges.
+        """Map session aggregates to the bottom KPI cards (icon + value text).
 
-        - Ø Stress Events: average stress-event count per session using the
-          same RMSSD threshold-crossing logic as PostSessionView.
+        - Ø Stress Events: average stress-event count per session (same RMSSD
+          threshold-crossing logic as PostSessionView).
         - Ø Error Rate: average wall-contact count per session.
-        - Ø Cognitive Load: average pupil change percentage (|PDI|) across
-          all sessions.
+        - Ø High Cognitive Load Events: average pupil-based high-workload
+          crossings per session (same logic as PostSessionView).
         """
         stats = self._biometric_stats
 
         # ── Ø Stress Events ──────────────────────────────────────────────────
         event_counts = [v["stress_events"] for v in stats.values()]
         avg_events = sum(event_counts) / len(event_counts) if event_counts else 0.0
-        # Normalize: cap at 200 stress-event samples → gauge full scale.
-        _STRESS_EVENT_CAP = 200
-        stress_value = min(1.0, avg_events / _STRESS_EVENT_CAP)
 
         # ── Ø Error Rate ─────────────────────────────────────────────────────
         error_rates = [
@@ -648,30 +756,25 @@ class DashboardView(QWidget):
             if v["error_rate_per_session"] is not None
         ]
         avg_error_rate = sum(error_rates) / len(error_rates) if error_rates else 0.0
-        # Normalize: cap at 10 wall contacts per session → gauge full scale.
-        _ERROR_RATE_CAP_PER_SESSION = 10.0
-        error_value = min(1.0, avg_error_rate / _ERROR_RATE_CAP_PER_SESSION)
 
-        # ── Ø Cognitive Load ─────────────────────────────────────────────────
-        pupil_change_values = [
-            v["avg_pupil_change_pct"]
-            for v in stats.values()
-            if v["avg_pupil_change_pct"] is not None
-        ]
-        avg_pupil_change_pct = (
-            sum(pupil_change_values) / len(pupil_change_values)
-            if pupil_change_values
-            else 0.0
+        # ── Ø High cognitive load (pupil threshold crossings) ───────────────
+        workload_counts = [v["high_workload_events"] for v in stats.values()]
+        avg_workload = (
+            sum(workload_counts) / len(workload_counts) if workload_counts else 0.0
         )
-        _PUPIL_CHANGE_CAP_PERCENT = 100.0
-        load_value = min(1.0, max(0.0, avg_pupil_change_pct / _PUPIL_CHANGE_CAP_PERCENT))
 
-        if self._stress_gauge is not None:
-            self._stress_gauge.set_value(stress_value, f"{avg_events:.1f}")
-        if self._error_gauge is not None:
-            self._error_gauge.set_value(error_value, f"{avg_error_rate:.1f}/session")
-        if self._load_gauge is not None:
-            self._load_gauge.set_value(load_value, f"{avg_pupil_change_pct:.1f}%")
+        if self._stress_value_label is not None:
+            self._stress_value_label.setText(
+                f"{avg_events:.1f}/session" if event_counts else "—"
+            )
+        if self._error_value_label is not None:
+            self._error_value_label.setText(
+                f"{avg_error_rate:.1f}/session" if error_rates else "—"
+            )
+        if self._workload_value_label is not None:
+            self._workload_value_label.setText(
+                f"{avg_workload:.1f}/session" if workload_counts else "—"
+            )
 
     def _update_progress_plot(self) -> None:
         """Update progress chart data and x-axis labels."""
@@ -700,72 +803,80 @@ class DashboardView(QWidget):
         axis.setTicks([ticks])
 
     def _build_chart_series(self) -> tuple[list[float], list[float], list[float], list[str]]:
-        """Build progress and model-series values for the top dashboard chart.
+        """Build a combined performance learning curve.
 
-        Primary source is the Schmettow learning-curve model fitted on
-        per-session error rate (errors per minute; error domain).  Raw rates
-        are normalized into a 0–100 error scale before fitting so the resulting
-        performance domain maps cleanly to the existing 0–100 % y-axis.
+        Performance metric per session (only sessions with a recorded
+        ``error_count`` — ``NULL`` skips the trial so the chart reflects tracked
+        wall contacts):
 
-        Only completed sessions with valid duration and error_count are used.
-        No synthetic placeholders are returned.
+            effective_time = duration_s + (wall_contacts x WALL_CONTACT_PENALTY_S)
+
+        This single value captures both speed (time on task) and accuracy
+        (wall contacts).  Lower effective_time = better performance.
+
+        The raw effective times are normalized to a 0-100 error scale, then
+        inverted so 100 % = best performance on the chart.  The Schmettow
+        model is fitted on the error-domain values.
         """
         ordered = sorted(self._sessions, key=lambda row: str(row["started_at"]))
-        # Gather chronological error-rate history (higher = worse):
-        # tissue damage events (wall contacts) per minute.
-        valid_trials: list[int] = []
-        raw_error_rates: list[float] = []
-        for session in ordered:
-            error_rate_per_min = self._compute_error_rate_per_minute(
-                session["error_count"],
-                session["started_at"],
-                session["ended_at"],
-            )
-            if error_rate_per_min is None:
-                continue
-            valid_trials.append(len(valid_trials) + 1)
-            raw_error_rates.append(float(error_rate_per_min))
 
-        if not raw_error_rates:
+        valid_trials: list[int] = []
+        raw_effective_times: list[float] = []
+
+        for session in ordered:
+            duration_s = self._compute_session_duration_seconds(
+                session["started_at"], session["ended_at"]
+            )
+            if duration_s is None or duration_s <= 0:
+                continue
+
+            error_count = session["error_count"]
+            if error_count is None:
+                continue
+
+            wall_contacts = float(error_count)
+            effective_time = float(duration_s) + wall_contacts * WALL_CONTACT_PENALTY_S
+
+            valid_trials.append(len(valid_trials) + 1)
+            raw_effective_times.append(effective_time)
+
+        if not raw_effective_times:
             return [], [], [], []
 
-        # Normalize raw errors to a model-friendly 0..SCORE_MAX error scale.
-        # This mirrors the imported learning-curve flow where metrics are put
-        # onto a comparable bounded domain before fitting.
-        e_min = min(raw_error_rates)
-        e_max = max(raw_error_rates)
+        # Normalize to 0-SCORE_MAX error scale
+        e_min = min(raw_effective_times)
+        e_max = max(raw_effective_times)
         e_span = e_max - e_min
 
-        def _norm_error(rate: float) -> float:
+        def _norm_error(v: float) -> float:
             if e_span <= 0.0:
                 return 0.0
-            return ((rate - e_min) / e_span) * float(SCORE_MAX)
+            return ((v - e_min) / e_span) * float(SCORE_MAX)
 
-        norm_errors = [_norm_error(rate) for rate in raw_error_rates]
+        norm_errors = [_norm_error(v) for v in raw_effective_times]
 
-        # Fit Schmettow only when we have enough sessions with error data.
+        # Fit Schmettow on the error domain
         fit = None
         if len(norm_errors) >= LC_MIN_SESSIONS and e_span > 0.0:
-            fit_trials = np.array(valid_trials, dtype=float)
-            fit_errors = np.array(norm_errors, dtype=float)
-            fit = fit_schmettow(fit_trials, fit_errors, score_max=float(SCORE_MAX))
+            fit = fit_schmettow(
+                np.array(valid_trials, dtype=float),
+                np.array(norm_errors, dtype=float),
+                score_max=float(SCORE_MAX),
+            )
 
-        def _clamp_score(v: float) -> float:
+        def _clamp(v: float) -> float:
             return max(0.0, min(float(SCORE_MAX), float(v)))
 
         x_values = [float(i) for i in range(len(valid_trials))]
         labels = [f"S{i}" for i in valid_trials]
-        actual_values = [
-            _clamp_score(float(SCORE_MAX) - err)
-            for err in norm_errors
-        ]
+        actual_values = [_clamp(float(SCORE_MAX) - e) for e in norm_errors]
 
         if fit is None:
             estimate_values = []
         else:
             estimate_values = [
-                _clamp_score(predict_at_trial(fit, trial, score_max=float(SCORE_MAX)))
-                for trial in valid_trials
+                _clamp(predict_at_trial(fit, t, score_max=float(SCORE_MAX)))
+                for t in valid_trials
             ]
 
         return x_values, actual_values, estimate_values, labels
@@ -802,23 +913,23 @@ class DashboardView(QWidget):
         bottom_axis.setTicks([ticks])
 
     def _build_analysis_series(self) -> tuple[list[float], list[float], list[float], list[str]]:
-        """Build per-session average biometric trend series.
+        """Build per-session trend series from persisted live-session samples.
 
-        Stress series: inverted normalised average RMSSD — high RMSSD means low
-        physiological stress, so the series is flipped so that a rising line
-        indicates rising stress (falling HRV).
+        Data is read via :meth:`_load_biometric_stats` (same aggregates the app
+        stores at session end: ``AVG(rmssd)`` from ``hrv_samples``, ``AVG(cli)``
+        from ``cli_samples``).
 
-        Workload series: average CLI per session scaled to 0–100 %.
+        **Stress %** (y-axis): among the up-to-12 displayed sessions, each
+        point is cohort-normalised mean RMSSD inverted to 0–100 % so higher
+        values mean relatively lower HRV within that window.
 
-        Both axes are expressed as percentages so the existing 0–100 % y-axis
-        labelling remains correct.
+        **Workload %**: mean CLI for the session × 100 (CLI is 0–1 in the DB).
+
+        Missing HRV or CLI for a session uses a neutral 50 % placeholder so the
+        series length still matches session count.
         """
         if not self._sessions:
-            x_values = [0.0, 1.0, 2.0, 3.0]
-            labels = ["S1", "S2", "S3", "S4"]
-            stress_values = [54.0, 43.0, 49.0, 37.0]
-            workload_values = [46.0, 57.0, 52.0, 63.0]
-            return x_values, stress_values, workload_values, labels
+            return [], [], [], []
 
         stats = self._biometric_stats
         ordered = sorted(self._sessions, key=lambda row: str(row["started_at"]))
@@ -880,6 +991,8 @@ class DashboardView(QWidget):
           or ``None``.
         - ``stress_events``: number of RMSSD threshold crossings (< -10 % from
           baseline), matching the per-session stress-event definition.
+        - ``high_workload_events``: pupil PDI upward crossings above the adaptive
+          workload threshold (same definition as PostSessionView).
         - ``error_count``: raw surgical error count from the sessions table,
           or ``None`` when not yet recorded.
         - ``error_rate_per_session``: surgical error frequency for the session,
@@ -904,6 +1017,7 @@ class DashboardView(QWidget):
                 "avg_cli": None,
                 "avg_pupil_change_pct": None,
                 "stress_events": 0,
+                "high_workload_events": 0,
                 "error_count": session["error_count"],
                 "error_rate_per_session": self._compute_error_rate_per_session(
                     session["error_count"],
@@ -964,6 +1078,22 @@ class DashboardView(QWidget):
             stats[sid]["stress_events"] = self._compute_stress_event_count(
                 rmssd_values,
                 baseline_rmssd,
+            )
+
+        pupil_by_session: dict[int, list[tuple[float, float]]] = {}
+        for row in conn.execute(
+            "SELECT session_id, timestamp, pdi FROM pupil_samples "
+            "WHERE pdi IS NOT NULL ORDER BY session_id, timestamp"
+        ).fetchall():
+            sid = int(row[0])
+            if sid in stats:
+                pupil_by_session.setdefault(sid, []).append(
+                    (float(row[1]), float(row[2]))
+                )
+
+        for sid, samples in pupil_by_session.items():
+            stats[sid]["high_workload_events"] = self._compute_high_workload_event_count(
+                samples
             )
 
         logger.debug(
@@ -1047,6 +1177,55 @@ class DashboardView(QWidget):
                 stress_events += 1
             prev_below_stress = is_below_stress
         return stress_events
+
+    @staticmethod
+    def _compute_high_workload_event_count(
+        samples: list[tuple[float, float]],
+    ) -> int:
+        """Count upward crossings above adaptive pupil workload threshold.
+
+        Matches :meth:`PostSessionView._query_high_workload_events` / live view
+        logic (smoothed PDI vs rolling mean × ``WORKLOAD_THRESHOLD_FACTOR``).
+        """
+        if not samples:
+            return 0
+
+        smooth_window: deque[tuple[float, float]] = deque()
+        rolling_window: deque[tuple[float, float]] = deque()
+
+        def append_window_mean(
+            buffer: deque[tuple[float, float]],
+            timestamp: float,
+            value: float,
+            window_seconds: float,
+        ) -> float:
+            buffer.append((timestamp, value))
+            cutoff = timestamp - window_seconds
+            while buffer and buffer[0][0] < cutoff:
+                buffer.popleft()
+            return float(sum(s for _, s in buffer) / len(buffer))
+
+        events = 0
+        prev_above = False
+        for timestamp, pdi in samples:
+            smoothed_pdi = append_window_mean(
+                smooth_window,
+                timestamp,
+                pdi,
+                WORKLOAD_PUPIL_SMOOTHING_SECONDS,
+            )
+            rolling_mean = append_window_mean(
+                rolling_window,
+                timestamp,
+                smoothed_pdi,
+                WORKLOAD_PUPIL_ROLLING_SECONDS,
+            )
+            threshold = rolling_mean * WORKLOAD_THRESHOLD_FACTOR
+            above = smoothed_pdi > threshold
+            if above and not prev_above:
+                events += 1
+            prev_above = above
+        return events
 
     @staticmethod
     def _format_seconds(total_seconds: int) -> str:

@@ -35,11 +35,10 @@ VIDEO_RECORDING_FOURCC: str = "mp4v"
 # Hardware — Raspberry Pi Pico ECG (YLab Zero firmware)
 # ---------------------------------------------------------------------------
 
-# Set to True to use the real Pico over USB serial; False uses MockHRVSensor.
+# True: Pi Pico ECG over USB. False: ECG path disabled (no samples; UI shows disconnected).
 USE_PICO_ECG: bool = True
 
-# Set to True when a real eye tracker is physically connected; False disables
-# MockEyeTracker so no fake pupil/PDI/CLI data appears in the live session.
+# True: USB camera eye tracker. False: eye path disabled (no pupil samples).
 USE_EYE_TRACKER: bool = True
 
 # USB serial port for the Pi Pico (macOS: /dev/tty.usbmodem*, Linux: /dev/ttyACM*).
@@ -159,3 +158,7 @@ DB_PATH: str = "biotrace.db"
 
 SCORE_MAX: int = 100.00          # Maximum possible performance score per session
 LC_MIN_SESSIONS: int = 5     # Minimum sessions with error data before curve is fitted
+
+# Penalty time added per wall contact (seconds).  Combined performance metric:
+#   effective_time = session_duration_s + (wall_contacts × WALL_CONTACT_PENALTY_S)
+WALL_CONTACT_PENALTY_S: float = 10.0

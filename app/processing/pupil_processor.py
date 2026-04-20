@@ -6,7 +6,7 @@ emits the processed result.
 
 Usage::
 
-    eye_tracker = MockEyeTracker()
+    eye_tracker = EyeTrackerSensor(parent=session_manager)
     processor = PupilProcessor(baseline_mm=4.5)
     eye_tracker.raw_pupil_received.connect(processor.on_pupil_sample)
     processor.pdi_updated.connect(live_view.on_pdi_updated)

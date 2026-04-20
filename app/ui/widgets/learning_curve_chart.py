@@ -147,7 +147,7 @@ class LearningCurveChart(QWidget):
         
         # Project the curve based on whether we are in the error domain or score domain.
         def get_curve_val(t):
-            err = fit.scale * (1 - fit.leff)**t + fit.maxp
+            err = fit.scale * (1 - fit.leff)**(t + fit.pexp) + fit.maxp
             if y_axis_inverted:
                 # Time domain or Error Score domain (lower is better, 0 is target)
                 return err
