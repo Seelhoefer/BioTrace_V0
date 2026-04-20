@@ -85,4 +85,6 @@ python -m pytest tests/
 
 ## License
 
-2026 TSS Lab. Built for surgical education research.
+# Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+
+Copyright (c) 2026 [RAZHAN RASHID/ DANIEL SEELHOEFER] . Built for surgical education research.
