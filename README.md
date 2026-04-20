@@ -46,7 +46,7 @@ On Windows, use `.venv\Scripts\activate` instead.
 Then start the app:
 
 ```
-python main.py
+python3 main.py
 ```
 
 The entry point auto detects the virtual environment, so `python main.py` also works without activating it manually.
