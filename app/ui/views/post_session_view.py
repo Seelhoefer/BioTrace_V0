@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -26,8 +27,8 @@ from app.ui.theme import (
     CARD_PADDING,
     COLOR_BACKGROUND,
     COLOR_BORDER,
-    COLOR_CARD,
     COLOR_DANGER,
+    COLOR_DANGER_BG,
     COLOR_FONT,
     COLOR_FONT_MUTED,
     COLOR_PRIMARY,
@@ -42,6 +43,7 @@ from app.ui.theme import (
     SPACE_1,
     SPACE_2,
     SPACE_3,
+    SPACE_4,
     GRID_GUTTER,
     CONTENT_PADDING_H,
     CONTENT_PADDING_V,
@@ -81,6 +83,7 @@ class PostSessionView(QWidget):
     back_to_dashboard = pyqtSignal()
     new_session_requested = pyqtSignal()
     session_renamed = pyqtSignal(int, str)
+    session_deleted = pyqtSignal()
 
     def __init__(
         self,
@@ -236,6 +239,32 @@ class PostSessionView(QWidget):
         video_area.setMinimumHeight(520) # Large playback area
         content_layout.addWidget(video_area)
 
+        content_layout.addSpacing(SPACE_4)
+
+        # Row 4: Dangerous Actions (Delete)
+        delete_btn = QPushButton(" Delete Session")
+        delete_btn.setIcon(get_icon("ph.trash-fill", color=COLOR_DANGER))
+        delete_btn.setIconSize(QSize(20, 20))
+        delete_btn.setMinimumHeight(50)
+        delete_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {COLOR_DANGER_BG};
+                color: {COLOR_DANGER};
+                border: 1px solid {COLOR_DANGER};
+                border-radius: {RADIUS_LG}px;
+                font-weight: 600;
+                font-size: {FONT_BODY}px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_DANGER};
+                color: #FFFFFF;
+            }}
+            """
+        )
+        delete_btn.clicked.connect(self._on_delete_clicked)
+        content_layout.addWidget(delete_btn)
+
         content_layout.addStretch(1)
         
         scroll.setWidget(content)
@@ -307,7 +336,7 @@ class PostSessionView(QWidget):
         ghost_action_button_stylesheet = (
             f"""
             QPushButton#secondary {{
-                background-color: {COLOR_CARD};
+                background-color: transparent;
                 color: {COLOR_PRIMARY};
                 border: 1px solid {COLOR_BORDER};
                 border-radius: {FONT_HEADING_2}px;
@@ -357,6 +386,26 @@ class PostSessionView(QWidget):
         self._title_edit.setFocus()
         self._title_edit.selectAll()
 
+    def _on_delete_clicked(self) -> None:
+        """Confirm and delete the current session from the database."""
+        if self._session_id is None:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Session",
+            "Are you sure you want to permanently delete this session? This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            deleted_id = self._session_id
+            self._session_repo.delete_session(deleted_id)
+            logger.info("Session %d deleted by user.", deleted_id)
+            self._session_id = None
+            self.session_deleted.emit()
+
     def _on_name_saved(self) -> None:
         """Save the new session name and revert to label mode."""
         new_name = self._title_edit.text().strip()
@@ -390,17 +439,12 @@ class PostSessionView(QWidget):
         """Create one numeric metric card and register value/subtitle labels."""
         card = QFrame()
         card.setObjectName("card")
-        card.setStyleSheet(
-            f"QFrame#card {{ background-color: transparent; border: 1px solid {COLOR_BORDER};"
-            f" border-radius: {RADIUS_LG}px; }}"
-        )
         card.setMinimumHeight(190)
-        card.setMinimumWidth(0)
         card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        
+
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(SPACE_3, SPACE_2, SPACE_3, SPACE_3)
-        card_layout.setSpacing(SPACE_1)
+        card_layout.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
+        card_layout.setSpacing(SPACE_2)
 
         icon_by_key = {
             "duration": ("ph.timer-fill", COLOR_PRIMARY),
@@ -410,31 +454,22 @@ class PostSessionView(QWidget):
         }
         icon_name, icon_color = icon_by_key.get(key, ("ph.circle-fill", COLOR_FONT_MUTED))
 
-        title_row = QHBoxLayout()
-        title_row.setSpacing(6)
-        title_row.addStretch(1)
-
-        icon_label = QLabel()
-        icon_label.setPixmap(get_icon(icon_name, color=icon_color).pixmap(14, 14))
-        title_row.addWidget(icon_label)
-
-        title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"color: {COLOR_FONT}; font-size: {FONT_CAPTION}px; font-weight: {WEIGHT_BOLD};"
-            "letter-spacing: 0.5px;"
-        )
-        title_row.addWidget(title_label)
-        title_row.addStretch(1)
-        card_layout.addLayout(title_row)
-
         card_layout.addStretch(1)
+
+        icon_px = max(56, FONT_HEADING_2 * 3)
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        icon_label.setPixmap(
+            get_icon(icon_name, color=icon_color, size=icon_px).pixmap(QSize(icon_px, icon_px))
+        )
+        card_layout.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         value_label = QLabel("—")
         value_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         value_label.setStyleSheet(
-            f"color: {COLOR_PRIMARY}; font-size: {FONT_HEADING_2 + 10}px; font-weight: {WEIGHT_BOLD};"
+            f"color: {COLOR_FONT}; font-size: {FONT_HEADING_2}px; font-weight: {WEIGHT_BOLD};"
         )
-        card_layout.addWidget(value_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(value_label)
 
         subtitle_label = QLabel("")
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -443,7 +478,15 @@ class PostSessionView(QWidget):
         )
         subtitle_label.hide()
         card_layout.addWidget(subtitle_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         card_layout.addStretch(1)
+
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        title_label.setStyleSheet(
+            f"color: {COLOR_FONT}; font-size: {FONT_BODY}px; font-weight: {WEIGHT_BOLD};"
+        )
+        card_layout.addWidget(title_label)
 
         self._metric_value_labels[key] = value_label
         self._metric_subtitle_labels[key] = subtitle_label

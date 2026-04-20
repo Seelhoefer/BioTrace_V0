@@ -25,7 +25,6 @@ def test_space_advances_from_pupil_step_when_eye_tracker_disabled(monkeypatch, q
 
     assert view._step == "breathing"
     assert view._content_stack.currentIndex() == 1
-    assert view._step_label.text() == "STEP 2 OF 2  ·  HRV + PUPIL BASELINE"
 
 
 def test_space_advances_even_before_eye_is_ready(monkeypatch, qapp) -> None:

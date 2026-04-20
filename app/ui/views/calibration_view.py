@@ -74,7 +74,7 @@ from app.ui.theme import (
     get_icon,
 )
 from app.utils.config import (
-    CALIBRATION_DURATION_SECONDS,
+    get_calibration_duration,
     EYE_TRACKER_CAMERA_INDEX,
     USE_EYE_TRACKER,
 )
@@ -468,7 +468,6 @@ class EyeCameraPreview(QFrame):
         preview_h = self._PREVIEW_H if compact else 360
         video_w = self._VIDEO_W if compact else 400
         video_h = self._VIDEO_H if compact else 300
-        title_size = 9 if compact else 12
         status_size = 9 if compact else 12
 
         self.setFixedSize(preview_w, preview_h)
@@ -478,15 +477,6 @@ class EyeCameraPreview(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(3)
-
-        # Section title
-        title = QLabel("EYE ALIGNMENT")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(
-            f"color: {COLOR_FONT_MUTED}; font-size: {title_size}px; font-weight: 700; "
-            "letter-spacing: 1.5px; background: transparent;"
-        )
-        layout.addWidget(title)
 
         # Video frame label
         self._video_lbl = QLabel()
@@ -634,7 +624,7 @@ class CalibrationView(QWidget):
         self._eye_ready: bool = not USE_EYE_TRACKER
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        self._baseline_remaining: int = CALIBRATION_DURATION_SECONDS
+        self._baseline_remaining: int = get_calibration_duration()
         self._recording: bool = False
         self._complete: bool = False
         self._computed_rmssd: float = 0.0
@@ -734,13 +724,6 @@ class CalibrationView(QWidget):
 
         root.addStretch(1)
 
-        self._step_label = QLabel("")
-        self._step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._step_label.setStyleSheet(
-            f"color: {COLOR_FONT_MUTED}; font-size: {FONT_CAPTION}px; font-weight: 700;"
-        )
-        root.addWidget(self._step_label)
-
         self._content_stack = QStackedWidget()
         self._content_stack.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -761,13 +744,6 @@ class CalibrationView(QWidget):
         layout = QVBoxLayout(page)
         layout.setSpacing(SPACE_3)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-
-        headline = QLabel("Eye Alignment Check")
-        headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        headline.setStyleSheet(
-            f"color: {COLOR_FONT}; font-size: {FONT_TITLE}px; font-weight: 600;"
-        )
-        layout.addWidget(headline)
 
         if USE_EYE_TRACKER:
             self._eye_preview = EyeCameraPreview(EYE_TRACKER_CAMERA_INDEX, compact=False)
@@ -891,7 +867,6 @@ class CalibrationView(QWidget):
     def _show_pupil_alignment_step(self) -> None:
         """Activate the eye-alignment screen."""
         self._step = "pupil_alignment"
-        self._step_label.setText("STEP 1 OF 2  ·  EYE ALIGNMENT")
         self._content_stack.setCurrentIndex(0)
         self._countdown_ring.hide()
         self._restart_btn.hide()
@@ -911,7 +886,6 @@ class CalibrationView(QWidget):
         """Activate the breathing baseline screen after eye alignment."""
         self._step = "breathing"
         self._content_stack.setCurrentIndex(1)
-        self._step_label.setText("STEP 2 OF 2  ·  HRV + PUPIL BASELINE")
         self._breath_label.setText("Press Start")
         self._status_label.setText("Follow the orb to record your HRV and pupil baseline")
         self._cta_btn.show()
@@ -960,6 +934,7 @@ class CalibrationView(QWidget):
     def _show_baseline_popup(self) -> None:
         """Show a popup card with computed baseline values after calibration."""
         rmssd_line, pupil_line = self._format_baseline_value_lines()
+        calibration_ok = self._computed_rmssd > 0.0 or self._computed_pupil > 0.0
 
         popup = QDialog(self)
         popup.setModal(True)
@@ -970,10 +945,25 @@ class CalibrationView(QWidget):
         layout.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
         layout.setSpacing(SPACE_2)
 
-        headline = QLabel("Calibration successful")
-        headline.setStyleSheet(
-            f"color: {COLOR_SUCCESS}; font-size: {FONT_TITLE}px; font-weight: 700;"
-        )
+        if calibration_ok:
+            headline = QLabel("Calibration successful")
+            headline.setStyleSheet(
+                f"color: {COLOR_SUCCESS}; font-size: {FONT_TITLE}px; font-weight: 700;"
+            )
+        else:
+            headline = QLabel("Calibration not successful")
+            headline.setStyleSheet(
+                f"color: {COLOR_DANGER}; font-size: {FONT_TITLE}px; font-weight: 700;"
+            )
+            note = QLabel(
+                "No sensor data was received during the calibration window. "
+                "Check that your ECG and eye tracker are connected and try again."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet(
+                f"color: {COLOR_FONT}; font-size: {FONT_BODY_LARGE}px; font-weight: 400;"
+            )
+
         layout.addWidget(headline)
 
         rmssd_label = QLabel(rmssd_line)
@@ -988,7 +978,10 @@ class CalibrationView(QWidget):
         )
         layout.addWidget(pupil_label)
 
-        next_btn = QPushButton("Next")
+        if not calibration_ok:
+            layout.addWidget(note)
+
+        next_btn = QPushButton("Start Session Anyway" if not calibration_ok else "Next")
         next_btn.clicked.connect(popup.accept)
         layout.addWidget(next_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -1053,7 +1046,7 @@ class CalibrationView(QWidget):
             self._eye_preview.stop()
 
         if self._session_manager is not None and self._recording:
-            elapsed = CALIBRATION_DURATION_SECONDS - self._baseline_remaining
+            elapsed = get_calibration_duration() - self._baseline_remaining
             try:
                 rmssd, pupil = self._session_manager.end_calibration(duration_seconds=elapsed)
                 self._computed_rmssd = rmssd
@@ -1077,7 +1070,7 @@ class CalibrationView(QWidget):
         if self._session_manager and self._recording:
             try:
                 self._session_manager.end_calibration(
-                    duration_seconds=CALIBRATION_DURATION_SECONDS - self._baseline_remaining
+                    duration_seconds=get_calibration_duration() - self._baseline_remaining
                 )
             except Exception:
                 pass
@@ -1125,7 +1118,7 @@ class CalibrationView(QWidget):
         self._prestart_active = False
         self._recording = True
         self._complete = False
-        self._baseline_remaining = CALIBRATION_DURATION_SECONDS
+        self._baseline_remaining = get_calibration_duration()
         self._countdown_ring.show()
         self._countdown_ring.set_progress(1.0)
         self._restart_btn.show()
@@ -1139,7 +1132,7 @@ class CalibrationView(QWidget):
         self._cta_btn.hide()
         self._breath_label.setText("Breathe in…")
         self._status_label.setText(
-            f"Recording HRV + pupil baseline — {CALIBRATION_DURATION_SECONDS} s remaining"
+            f"Recording HRV + pupil baseline — {get_calibration_duration()} s remaining"
         )
 
         if self._session_manager is not None:
@@ -1154,7 +1147,7 @@ class CalibrationView(QWidget):
             return
 
         self._countdown_timer.stop()
-        self._baseline_remaining = CALIBRATION_DURATION_SECONDS
+        self._baseline_remaining = get_calibration_duration()
         self._countdown_ring.show()
         self._countdown_ring.set_progress(1.0)
         self._restart_btn.show()
@@ -1171,7 +1164,7 @@ class CalibrationView(QWidget):
     def _tick_countdown(self) -> None:
         """Called every second during baseline recording."""
         self._baseline_remaining -= 1
-        progress = self._baseline_remaining / CALIBRATION_DURATION_SECONDS
+        progress = self._baseline_remaining / get_calibration_duration()
         self._countdown_ring.set_progress(progress)
         if self._baseline_remaining > 0:
             self._status_label.setText(
@@ -1185,7 +1178,7 @@ class CalibrationView(QWidget):
         """Compute baseline values and transition to 'Start Session' state."""
         if self._session_manager is not None:
             rmssd, pupil = self._session_manager.end_calibration(
-                duration_seconds=CALIBRATION_DURATION_SECONDS
+                duration_seconds=get_calibration_duration()
             )
             self._computed_rmssd = rmssd
             self._computed_pupil = pupil
@@ -1193,7 +1186,6 @@ class CalibrationView(QWidget):
         self._recording = False
         self._complete = True
         self._step = "complete"
-        self._step_label.setText("CALIBRATION COMPLETE")
         self._breath_label.setText("Press Start")
         self._status_label.setText("Ready to begin")
         self._restart_btn.hide()
@@ -1242,7 +1234,7 @@ class CalibrationView(QWidget):
         self._countdown_timer.stop()
         self._step = "pupil_alignment"
         self._eye_ready = not USE_EYE_TRACKER
-        self._baseline_remaining = CALIBRATION_DURATION_SECONDS
+        self._baseline_remaining = get_calibration_duration()
         self._recording = False
         self._complete = False
         self._computed_rmssd = 0.0

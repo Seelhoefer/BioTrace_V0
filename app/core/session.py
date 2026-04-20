@@ -34,7 +34,7 @@ from app.utils.config import (
     PICO_ECG_BAUD,
     PICO_ECG_SAMPLE_RATE_HZ,
     SESSIONS_DIR,
-    CALIBRATION_DURATION_SECONDS,
+    get_calibration_duration,
     CALIBRATION_MIN_ECG_SECONDS,
     ERROR_EVENT_DEBOUNCE_SECONDS,
 )
@@ -349,7 +349,7 @@ class SessionManager(QObject):
         pupil_array = np.array(list(self._cal_pupils), dtype=float)
         min_ecg_samples = int(CALIBRATION_MIN_ECG_SECONDS * PICO_ECG_SAMPLE_RATE_HZ)
         ecg_ok = len(ecg_arr) >= min_ecg_samples
-        if duration_seconds >= CALIBRATION_DURATION_SECONDS and ecg_ok:
+        if duration_seconds >= get_calibration_duration() and ecg_ok:
             nk_result = compute_window_hrv_dict(ecg_arr, PICO_ECG_SAMPLE_RATE_HZ)
             if nk_result.get("status") == "ok":
                 self._baseline_rmssd = float(nk_result["rmssd_ms"])
@@ -383,7 +383,7 @@ class SessionManager(QObject):
                 "Calibration RMSSD baseline rejected (duration=%ds, n_ecg=%d; requires >=%ds and >=%d samples).",
                 duration_seconds,
                 len(ecg_arr),
-                CALIBRATION_DURATION_SECONDS,
+                get_calibration_duration(),
                 min_ecg_samples,
             )
 

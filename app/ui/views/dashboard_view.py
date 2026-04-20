@@ -339,17 +339,17 @@ class DashboardView(QWidget):
         self._progress_plot.getAxis("bottom").setLabel("Sessions", color=COLOR_FONT_MUTED)
 
         estimate_pen = pg.mkPen(color=COLOR_FONT_MUTED, width=3, style=Qt.PenStyle.DashLine)
-        actual_pen = pg.mkPen(color=COLOR_PRIMARY, width=4)
 
         self._estimate_curve = self._progress_plot.plot([], [], pen=estimate_pen)
         self._actual_curve = self._progress_plot.plot(
             [], [],
-            pen=actual_pen,
+            pen=None,
             symbol="o",
             symbolSize=8,
             symbolBrush=pg.mkBrush(COLOR_PRIMARY),
             symbolPen=pg.mkPen(COLOR_PRIMARY),
         )
+
         self._progress_plot.installEventFilter(self)
         layout.addWidget(self._progress_plot, stretch=1)
 
@@ -358,39 +358,15 @@ class DashboardView(QWidget):
     def _make_personal_best_card(self) -> QFrame:
         """Right card: minimalist top-3 best sessions layout."""
         card = self._make_card()
-        card.setStyleSheet(
-            f"""
-            QFrame#card {{
-                background-color: transparent;
-                border: none;
-                border-radius: {RADIUS_LG}px;
-            }}
-            """
-        )
         layout = QVBoxLayout(card)
         layout.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
         layout.setSpacing(SPACE_3)
 
         title = QLabel("Personal Best Times")
         title.setStyleSheet(
-            f"color: {COLOR_FONT}; font-size: {CARD_TITLE_FONT_SIZE}px; font-weight: 700;"
+            f"color: {COLOR_FONT}; font-size: {CARD_TITLE_FONT_SIZE}px; font-weight: 700; border: none;"
         )
         layout.addWidget(title)
-
-        sessions_wrap = QFrame()
-        sessions_wrap.setObjectName("personal_best_sessions")
-        sessions_wrap.setStyleSheet(
-            f"""
-            QFrame#personal_best_sessions {{
-                border: 1px solid {COLOR_BORDER};
-                border-radius: {RADIUS_LG}px;
-                background-color: {COLOR_CARD};
-            }}
-            """
-        )
-        wrap_layout = QVBoxLayout(sessions_wrap)
-        wrap_layout.setContentsMargins(SPACE_2, SPACE_2, SPACE_2, SPACE_2)
-        wrap_layout.setSpacing(SPACE_2)
 
         self._personal_best_placeholder = QLabel(
             "No session data available yet. Start your first session to see your "
@@ -399,11 +375,10 @@ class DashboardView(QWidget):
         self._personal_best_placeholder.setWordWrap(True)
         self._personal_best_placeholder.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self._personal_best_placeholder.setStyleSheet(
-            f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500; "
-            f"padding: {SPACE_2}px;"
+            f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500; border: none;"
         )
         self._personal_best_placeholder.setVisible(False)
-        wrap_layout.addWidget(self._personal_best_placeholder)
+        layout.addWidget(self._personal_best_placeholder)
 
         # Reset references in case the card is rebuilt.
         self._best_time_rows = []
@@ -412,12 +387,17 @@ class DashboardView(QWidget):
         for rank in range(1, 4):
             row_card = _PersonalBestRowFrame()
             row_card.row_clicked.connect(self.session_selected.emit)
+            row_card.setObjectName("pb_row_card")
             row_card.setStyleSheet(
                 f"""
-                QFrame {{
-                    border: none;
+                QFrame#pb_row_card {{
+                    border: 1px solid {COLOR_BORDER};
                     border-radius: {RADIUS_LG}px;
-                    background-color: {COLOR_BACKGROUND};
+                    background-color: transparent;
+                }}
+                QFrame#pb_row_card:hover {{
+                    border: 1px solid {COLOR_PRIMARY};
+                    background-color: rgba(30, 64, 175, 0.06);
                 }}
                 """
             )
@@ -432,13 +412,13 @@ class DashboardView(QWidget):
 
             meta_label = QLabel(f"BEST SESSION #{rank}")
             meta_label.setStyleSheet(
-                f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 600; letter-spacing: 1px;"
+                f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 600; letter-spacing: 1px; border: none;"
             )
 
             duration_label = QLabel("0:00")
             duration_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             duration_label.setStyleSheet(
-                f"color: {COLOR_PRIMARY}; font-size: {FONT_HEADING_2}px; font-weight: 700;"
+                f"color: {COLOR_PRIMARY}; font-size: {FONT_HEADING_2}px; font-weight: 700; border: none;"
             )
 
             top_line.addWidget(meta_label)
@@ -447,7 +427,7 @@ class DashboardView(QWidget):
 
             session_label = QLabel("Session —")
             session_label.setStyleSheet(
-                f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500;"
+                f"color: {COLOR_FONT_MUTED}; font-size: {FONT_BODY}px; font-weight: 500; border: none;"
             )
 
             _pb_transparent = Qt.WidgetAttribute.WA_TransparentForMouseEvents
@@ -460,9 +440,8 @@ class DashboardView(QWidget):
 
             self._best_time_rows.append((meta_label, duration_label, session_label))
             self._best_row_frames.append(row_card)
-            wrap_layout.addWidget(row_card)
+            layout.addWidget(row_card)
 
-        layout.addWidget(sessions_wrap)
         layout.addStretch(1)
         return card
 
@@ -558,7 +537,7 @@ class DashboardView(QWidget):
         left_axis = self._analysis_plot.getAxis("left")
         left_axis.setPen(pg.mkPen(COLOR_CHART_AXIS, width=0.8))
         left_axis.setTextPen(pg.mkPen(COLOR_FONT_MUTED, width=1))
-        left_axis.setLabel("Percentage (%)", color=COLOR_FONT_MUTED)
+        left_axis.setLabel("Events per Session", color=COLOR_FONT_MUTED)
 
         bottom_axis = self._analysis_plot.getAxis("bottom")
         bottom_axis.setPen(pg.mkPen(COLOR_CHART_AXIS, width=0.8))
@@ -902,31 +881,32 @@ class DashboardView(QWidget):
         else:
             self._workload_series_curve.setData([], [])
 
-        self._analysis_plot.setYRange(0, 100, padding=0.05)
+        all_values = stress_values + workload_values
+        y_max = max(all_values) if all_values else 1
+        y_ceil = max(int(y_max * 1.2) + 1, 5)
+        self._analysis_plot.setYRange(0, y_ceil, padding=0)
         self._analysis_plot.setXRange(-0.2, max(0.8, len(x_values) - 0.8), padding=0)
 
         left_axis = self._analysis_plot.getAxis("left")
-        left_axis.setTicks([[(0, "0%"), (25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")]])
+        left_axis.setTicks([[(v, str(v)) for v in range(0, y_ceil + 1, 5)]])
 
         bottom_axis = self._analysis_plot.getAxis("bottom")
         ticks = [(idx, label) for idx, label in enumerate(labels)]
         bottom_axis.setTicks([ticks])
 
     def _build_analysis_series(self) -> tuple[list[float], list[float], list[float], list[str]]:
-        """Build per-session trend series from persisted live-session samples.
+        """Build per-session trend series using real event counts.
 
-        Data is read via :meth:`_load_biometric_stats` (same aggregates the app
-        stores at session end: ``AVG(rmssd)`` from ``hrv_samples``, ``AVG(cli)``
-        from ``cli_samples``).
+        **Stress** (blue): number of RMSSD threshold crossings below −10 % of
+        baseline per session.  Each crossing is one "stress event" — the same
+        definition used everywhere else in the app.
 
-        **Stress %** (y-axis): among the up-to-12 displayed sessions, each
-        point is cohort-normalised mean RMSSD inverted to 0–100 % so higher
-        values mean relatively lower HRV within that window.
+        **Cognitive Workload** (amber): number of upward pupil-dilation crossings
+        above the adaptive threshold per session — i.e. how often the trainee
+        entered a high-cognitive-load state.
 
-        **Workload %**: mean CLI for the session × 100 (CLI is 0–1 in the DB).
-
-        Missing HRV or CLI for a session uses a neutral 50 % placeholder so the
-        series length still matches session count.
+        Both series are raw integer counts so the y-axis is "Events per Session".
+        Sessions with no sensor data contribute 0 (no placeholders or fake values).
         """
         if not self._sessions:
             return [], [], [], []
@@ -934,17 +914,6 @@ class DashboardView(QWidget):
         stats = self._biometric_stats
         ordered = sorted(self._sessions, key=lambda row: str(row["started_at"]))
         display = ordered[-12:]
-
-        # Collect RMSSD values across displayed sessions so we can normalise
-        # them to a 0–100 % scale relative to this cohort.
-        rmssd_vals = [
-            stats[s["id"]]["avg_rmssd"]
-            for s in display
-            if s["id"] in stats and stats[s["id"]]["avg_rmssd"] is not None
-        ]
-        rmssd_min = min(rmssd_vals) if rmssd_vals else 0.0
-        rmssd_max = max(rmssd_vals) if rmssd_vals else 1.0
-        rmssd_range = (rmssd_max - rmssd_min) if rmssd_max > rmssd_min else 1.0
 
         x_values: list[float] = []
         stress_values: list[float] = []
@@ -958,24 +927,8 @@ class DashboardView(QWidget):
             sid = session["id"]
             s = stats.get(sid, {})
 
-            avg_rmssd = s.get("avg_rmssd")
-            avg_cli = s.get("avg_cli")
-
-            # Stress %: invert normalised RMSSD so that lower HRV → higher line.
-            if avg_rmssd is not None:
-                rmssd_norm = (avg_rmssd - rmssd_min) / rmssd_range  # 0 = lowest, 1 = highest
-                stress_pct = max(0.0, min(100.0, (1.0 - rmssd_norm) * 100.0))
-            else:
-                stress_pct = 50.0  # neutral placeholder when no HRV data
-
-            # Workload %: CLI is already 0–1.
-            if avg_cli is not None:
-                workload_pct = max(0.0, min(100.0, avg_cli * 100.0))
-            else:
-                workload_pct = 50.0  # neutral placeholder when no CLI data
-
-            stress_values.append(stress_pct)
-            workload_values.append(workload_pct)
+            stress_values.append(float(s.get("stress_events", 0)))
+            workload_values.append(float(s.get("high_workload_events", 0)))
 
         return x_values, stress_values, workload_values, labels
 

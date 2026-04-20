@@ -5,13 +5,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from app.storage.database import DatabaseManager
 from app.ui.views.post_session_view import PostSessionView
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+
+from unittest.mock import MagicMock, patch
 
 @pytest.fixture(scope="module")
 def qapp() -> QApplication:
@@ -113,3 +115,42 @@ class TestPostSessionMetrics:
         assert view._metric_subtitle_labels["stress_events"].text() == ""
         assert view._metric_subtitle_labels["stress_events"].isHidden()
         assert view._metric_value_labels["workload_events"].text() == "2"
+
+
+class TestPostSessionDeletion:
+    def test_delete_session_emits_signal_and_removes_from_db(
+        self, view: PostSessionView, db: DatabaseManager
+    ) -> None:
+        conn = db.get_connection()
+        started_at = datetime.now(timezone.utc)
+        cur = conn.execute(
+            "INSERT INTO sessions (started_at) VALUES (?)",
+            (started_at.isoformat(sep=" "),),
+        )
+        sid = int(cur.lastrowid)
+        conn.commit()
+
+        view.load_session(sid)
+        
+        received: list[bool] = []
+        view.session_deleted.connect(lambda: received.append(True))
+
+        # Mock QMessageBox.question to return Yes
+        with patch("app.ui.views.post_session_view.QMessageBox.question") as mock_msg:
+            mock_msg.return_value = QMessageBox.StandardButton.Yes
+            
+            # Find and click delete button
+            delete_btn = None
+            for child in view.findChildren(QPushButton):
+                if "Delete Session" in child.text():
+                    delete_btn = child
+                    break
+            
+            assert delete_btn is not None
+            delete_btn.click()
+
+        assert received == [True]
+        
+        # Verify it's gone from DB
+        res = conn.execute("SELECT id FROM sessions WHERE id = ?", (sid,)).fetchone()
+        assert res is None

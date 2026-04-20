@@ -162,3 +162,26 @@ LC_MIN_SESSIONS: int = 5     # Minimum sessions with error data before curve is 
 # Penalty time added per wall contact (seconds).  Combined performance metric:
 #   effective_time = session_duration_s + (wall_contacts × WALL_CONTACT_PENALTY_S)
 WALL_CONTACT_PENALTY_S: float = 10.0
+
+
+# ---------------------------------------------------------------------------
+# Settings Helpers
+# ---------------------------------------------------------------------------
+
+def get_calibration_duration() -> int:
+    """Return the user-configured calibration duration (seconds)."""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("TSS Lab", "BioTrace")
+    # Cast to int because QSettings might return a string or None
+    val = settings.value("calibration_duration", CALIBRATION_DURATION_SECONDS)
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return CALIBRATION_DURATION_SECONDS
+
+
+def set_calibration_duration(seconds: int) -> None:
+    """Persist a new calibration duration to disk."""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("TSS Lab", "BioTrace")
+    settings.setValue("calibration_duration", int(seconds))

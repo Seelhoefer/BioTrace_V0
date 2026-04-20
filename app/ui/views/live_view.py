@@ -388,13 +388,11 @@ class LiveView(QWidget):
         if is_video:
             text_color = "#FFFFFF"
             border_color = "rgba(255, 255, 255, 0.4)"
-            hover_bg = "rgba(255, 255, 255, 0.1)"
             btn_bg = "#FFFFFF"
             btn_text = COLOR_PRIMARY
         else:
             text_color = COLOR_PRIMARY
             border_color = COLOR_BORDER
-            hover_bg = COLOR_PRIMARY_SUBTLE
             btn_bg = COLOR_PRIMARY
             btn_text = "#FFFFFF"
 
@@ -448,7 +446,8 @@ class LiveView(QWidget):
                 font-weight: 700;
             }}
             QPushButton:hover {{
-                background-color: {hover_bg if not is_video else COLOR_PRIMARY_SUBTLE};
+                background-color: {btn_bg};
+                color: {btn_text};
             }}
             """
         )

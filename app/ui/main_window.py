@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self._post_session_view.back_to_dashboard.connect(lambda: self.navigate_to(0))
         self._post_session_view.new_session_requested.connect(self._on_new_session_requested)
         self._post_session_view.session_renamed.connect(lambda sid, name: self._populate_recent_sessions())
+        self._post_session_view.session_deleted.connect(self._on_session_deleted)
 
         self.navigate_to(0)
         logger.info("MainWindow initialised.")
@@ -254,11 +255,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(settings_btn)
         self._settings_btn = settings_btn
 
-        logout_btn = QPushButton("  Log Out")
-        logout_btn.setIcon(get_icon("ph.sign-out-fill", color=COLOR_FONT))
-        logout_btn.setIconSize(QSize(ICON_SIZE_NAV, ICON_SIZE_NAV))
-        logout_btn.setObjectName("nav_button")
-        layout.addWidget(logout_btn)
+        quit_btn = QPushButton("  Quit")
+        quit_btn.setIcon(get_icon("ph.door-open-fill", color=COLOR_FONT))
+        quit_btn.setIconSize(QSize(ICON_SIZE_NAV, ICON_SIZE_NAV))
+        quit_btn.setObjectName("nav_button")
+        quit_btn.clicked.connect(self.close)
+        layout.addWidget(quit_btn)
 
         return sidebar
 
@@ -266,13 +268,16 @@ class MainWindow(QMainWindow):
         from app.storage.session_repository import SessionRepository
         from datetime import datetime
 
-        # clear existing
+        # clear existing — detach widgets from the sidebar parent so they vanish
+        # immediately; takeAt() alone leaves them parented and they can stay visible
+        # until deleteLater() runs (e.g. after deleting a session from post-session).
         self._recent_session_buttons = []
         while self._recent_sessions_layout.count():
             item = self._recent_sessions_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
 
         repo = SessionRepository(self._db)
         sessions = repo.get_all_sessions()
@@ -354,6 +359,13 @@ class MainWindow(QMainWindow):
 
         view_names = ["Dashboard", "Placeholder", "Calibration", "Live Session", "Post-Session", "Import", "Settings"]
         logger.info("Navigated to: %s", view_names[index])
+
+    def _on_session_deleted(self) -> None:
+        """Refresh UI and navigate back to Dashboard after a session is deleted."""
+        self._dashboard_view.refresh()
+        self._populate_recent_sessions()
+        self.navigate_to(0)
+        logger.info("Session deleted — navigated to Dashboard.")
 
     def _on_proceed_to_live(self) -> None:
         """Called when CalibrationView emits proceed_to_live."""
