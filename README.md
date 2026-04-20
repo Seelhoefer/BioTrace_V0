@@ -1,6 +1,6 @@
 # BioTrace
 
-BioTrace is a desktop application for real time physiological biofeedback during laparoscopic surgical training. It was built as part of a university research project at the TSS Lab.
+BioTrace is a desktop application for real time physiological biofeedback during laparoscopic surgical training. It was built as part of a university research project at the University of Twente.
 
 The idea is simple: while a trainee practices on a laparoscopic simulator, BioTrace captures their heart rate variability and pupil dilation in real time, records the endoscope video, and tracks wall contacts as errors. After each session the trainee can review everything together on a synchronized timeline, and over multiple sessions the app fits a learning curve so both trainee and mentor can see how performance is developing.
 
@@ -34,7 +34,7 @@ You need Python 3.11 or newer.
 Clone the repository, create a virtual environment, and install the dependencies:
 
 ```
-git clone https://github.com/fly-withme/biotrace.git
+git clone https://github.com/Seelhoefer/BioTrace_V0.git
 cd biotrace
 python3 -m venv .venv
 source .venv/bin/activate
