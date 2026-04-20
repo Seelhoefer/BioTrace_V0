@@ -1,0 +1,8 @@
+recordings/
+biotrace.log
+biotrace.db
+:memory:
+.venv/
+**/__pycache__/
+sessions/
+.DS_Store
