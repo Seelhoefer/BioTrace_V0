@@ -34,6 +34,7 @@ from app.storage.database import DatabaseManager
 from app.storage.session_repository import SessionRepository
 from app.analytics.learning_curve import fit_schmettow, predict_at_trial
 from app.utils.config import (
+    CALIBRATION_DURATION_SECONDS,
     LC_MIN_SESSIONS,
     SCORE_MAX,
     WALL_CONTACT_PENALTY_S,
@@ -806,7 +807,7 @@ class DashboardView(QWidget):
             duration_s = self._compute_session_duration_seconds(
                 session["started_at"], session["ended_at"]
             )
-            if duration_s is None or duration_s <= 0:
+            if duration_s is None or duration_s < CALIBRATION_DURATION_SECONDS:
                 continue
 
             error_count = session["error_count"]
@@ -912,8 +913,7 @@ class DashboardView(QWidget):
             return [], [], [], []
 
         stats = self._biometric_stats
-        ordered = sorted(self._sessions, key=lambda row: str(row["started_at"]))
-        display = ordered[-12:]
+        display = sorted(self._sessions, key=lambda row: str(row["started_at"]))
 
         x_values: list[float] = []
         stress_values: list[float] = []

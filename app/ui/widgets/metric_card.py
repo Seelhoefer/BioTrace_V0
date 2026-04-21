@@ -13,6 +13,7 @@ Usage::
 from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QTimer,
     Qt,
     pyqtProperty,
     pyqtSignal,
@@ -158,6 +159,7 @@ class MetricCard(QFrame):
         subtitle: str = "",
         decimals: int = 1,
         show_sparkline: bool = True,
+        show_loading_placeholder: bool = False,
         window_seconds: float = 10.0,
         parent: QWidget | None = None,
     ) -> None:
@@ -172,11 +174,19 @@ class MetricCard(QFrame):
         self._subtitle = subtitle
         self._decimals = decimals
         self._show_sparkline = show_sparkline
+        self._show_loading_placeholder = show_loading_placeholder
         self._window_seconds = window_seconds
         self._raw_value: float = 0.0
         self._display_value: float = 0.0
         self._has_data: bool = False
         self._accent_color: str = COLOR_PRIMARY
+
+        # Loading state animation (pulsing dots)
+        self._loading_counter: int = 0
+        self._loading_timer: QTimer = QTimer(self)
+        self._loading_timer.timeout.connect(self._advance_loading_animation)
+        if self._show_loading_placeholder:
+            self._loading_timer.start(600)  # Update every 600ms
 
         self._build_ui()
         self._animation = QPropertyAnimation(self, b"display_value", self)
@@ -212,9 +222,11 @@ class MetricCard(QFrame):
         value_col.setContentsMargins(0, 0, 0, 0)
         value_col.setSpacing(2)
 
-        self._value_label = QLabel("—")
+        initial_text = "Waiting..." if self._show_loading_placeholder else "—"
+        initial_color = COLOR_FONT_MUTED if self._show_loading_placeholder else COLOR_PRIMARY
+        self._value_label = QLabel(initial_text)
         self._value_label.setStyleSheet(
-            f"color: {COLOR_PRIMARY}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
+            f"color: {initial_color}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
         )
         value_col.addWidget(self._value_label)
 
@@ -272,10 +284,35 @@ class MetricCard(QFrame):
 
     def _refresh_label(self) -> None:
         """Re-render the value label with current display_value."""
-        formatted = f"{self._display_value:.{self._decimals}f}"
-        if self._unit:
-            formatted = f"{formatted} {self._unit}"
-        self._value_label.setText(formatted)
+        if not self._has_data:
+            if self._show_loading_placeholder:
+                # Show animated "Waiting" message only for selected cards.
+                dots = "." * (self._loading_counter % 4)
+                self._value_label.setText(f"Waiting{dots}")
+                self._value_label.setStyleSheet(
+                    f"color: {COLOR_FONT_MUTED}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
+                )
+            else:
+                self._value_label.setText("—")
+                self._value_label.setStyleSheet(
+                    f"color: {COLOR_PRIMARY}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
+                )
+        else:
+            formatted = f"{self._display_value:.{self._decimals}f}"
+            if self._unit:
+                formatted = f"{formatted} {self._unit}"
+            self._value_label.setText(formatted)
+            self._value_label.setStyleSheet(
+                f"color: {COLOR_PRIMARY}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
+            )
+
+    def _advance_loading_animation(self) -> None:
+        """Advance the loading animation counter."""
+        if not self._show_loading_placeholder:
+            return
+        self._loading_counter += 1
+        if not self._has_data:
+            self._refresh_label()
 
     # ------------------------------------------------------------------
     # Public API
@@ -293,6 +330,8 @@ class MetricCard(QFrame):
 
         if not self._has_data:
             self._has_data = True
+            if self._show_loading_placeholder:
+                self._loading_timer.stop()  # Stop loading animation once data arrives
             self._display_value = value
             self._raw_value = value
             self._refresh_label()
@@ -347,10 +386,18 @@ class MetricCard(QFrame):
         self._has_data = False
         self._display_value = 0.0
         self._raw_value = 0.0
-        self._value_label.setText("—")
+        self._loading_counter = 0
+        if self._show_loading_placeholder:
+            self._loading_timer.start(600)
+            self._value_label.setText("Waiting...")
+            label_color = COLOR_FONT_MUTED
+        else:
+            self._value_label.setText("—")
+            self._loading_timer.stop()
+            label_color = COLOR_PRIMARY
         self._accent_color = COLOR_PRIMARY
         self._value_label.setStyleSheet(
-            f"color: {COLOR_PRIMARY}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
+            f"color: {label_color}; font-size: {FONT_METRIC_XL}px; font-weight: 700;"
         )
         if self._sparkline is not None:
             self._sparkline.set_line_color(COLOR_PRIMARY)

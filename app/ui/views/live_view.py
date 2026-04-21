@@ -20,6 +20,7 @@ Mode Camera + Bio (index 1 in the mode stack):
 Dependency injection: call ``bind_session_manager()`` once after construction.
 """
 
+import statistics
 import time
 from collections import deque
 from pathlib import Path
@@ -232,11 +233,13 @@ class LiveView(QWidget):
         self._baseline_pupil_px: float = 0.0
         self._has_pupil_baseline: bool = False  # True once calibration sets a baseline
         self._bootstrap_pupil_samples: deque[tuple[float, float]] = deque()
+        self._bpm_buffer: deque[float] = deque(maxlen=5)
         self._pupil_smoothing_window: deque[tuple[float, float]] = deque()
         self._pupil_rolling_window: deque[tuple[float, float]] = deque()
         self._workload_state_is_elevated: bool = False
         self._pending_workload_state: bool | None = None
         self._pending_workload_since: float | None = None
+        self._last_stress_debug_log_ts: float = 0.0
         self._clock_timer = QTimer(self)
         self._clock_timer.setInterval(1000)
         self._clock_timer.timeout.connect(self._tick_clock)
@@ -286,11 +289,11 @@ class LiveView(QWidget):
         session_manager.session_resumed.connect(self._on_session_resumed)
         session_manager.error_count_updated.connect(self.on_error_count_updated)
         self._sync_pupil_baseline_state()
-        logger.info(
-            "Live timeline normalization: percent change from baseline mean "
-            "(percent_delta=((value-baseline_mean)/baseline_mean)*100)."
+        logger.debug(
+            "Live timeline normalization: percent change from baseline mean; "
+            "RMSSD is visually inverted so drops trend upward."
         )
-        logger.info("LiveView bound to SessionManager.")
+        logger.debug("LiveView bound to SessionManager.")
 
     # ------------------------------------------------------------------
     # UI construction
@@ -591,12 +594,14 @@ class LiveView(QWidget):
             name="HEART RATE",
             unit="bpm",
             decimals=0,
+            show_loading_placeholder=True,
             window_seconds=60.0,
         )
         self._rmssd_card = MetricCard(
             name="HRV (RMSSD)",
             unit="ms",
             decimals=1,
+            show_loading_placeholder=True,
             window_seconds=60.0,
         )
         self._speed_card = MetricCard(
@@ -776,7 +781,7 @@ class LiveView(QWidget):
         self._pause_btn.setChecked(True)
         is_video = self._mode_stack.currentIndex() == _MODE_CAMERA
         self._update_toolbar_theme(is_video)
-        logger.info("LiveView: session paused UI updated.")
+        logger.debug("LiveView: session paused UI updated.")
 
     @pyqtSlot(int)
     def _on_session_resumed(self, _session_id: int) -> None:
@@ -785,7 +790,7 @@ class LiveView(QWidget):
         self._pause_btn.setChecked(False)
         is_video = self._mode_stack.currentIndex() == _MODE_CAMERA
         self._update_toolbar_theme(is_video)
-        logger.info("LiveView: session resumed UI updated.")
+        logger.debug("LiveView: session resumed UI updated.")
 
     def cleanup(self) -> None:
         """Stop background activity before the view is destroyed."""
@@ -794,7 +799,7 @@ class LiveView(QWidget):
     @pyqtSlot(int)
     def _on_session_started(self, session_id: int) -> None:
         """Called when SessionManager emits ``session_started``."""
-        logger.info("LiveView: session %d started.", session_id)
+        logger.debug("LiveView: session %d started.", session_id)
         self._session_id = session_id
         self._session_active = True
         self._sync_pupil_baseline_state()
@@ -815,7 +820,7 @@ class LiveView(QWidget):
         MainWindow also listens to this signal and navigates to the
         Post-Session view — no navigation logic belongs here.
         """
-        logger.info("LiveView: session %d ended.", session_id)
+        logger.debug("LiveView: session %d ended.", session_id)
         self._stop_camera_recording()
         self._session_active = False
         self._stop_clock()
@@ -866,7 +871,7 @@ class LiveView(QWidget):
         # regardless of display mode.  Only the *display panel* switches here —
         # never touch the feed or recording lifecycle on a mode switch.
 
-        logger.info(
+        logger.debug(
             "Live view mode: %s",
             "Biofeedback" if index == _MODE_BIOFEEDBACK else "Camera + Bio",
         )
@@ -885,7 +890,7 @@ class LiveView(QWidget):
             self._video_feed.start(camera_index=self._current_camera_index)
             self._start_camera_recording()
             
-        logger.info("Switched to camera index %d", self._current_camera_index)
+        logger.debug("Switched to camera index %d", self._current_camera_index)
 
     # ------------------------------------------------------------------
     # Public data-update slots (called via SessionManager signals)
@@ -912,17 +917,35 @@ class LiveView(QWidget):
             hrv_percent_change = ((rmssd - baseline_rmssd) / baseline_rmssd) * 100.0
             # Higher stress when RMSSD drops below baseline; stress index 0–100 = −Δ%.
             stress_pct = max(0.0, min(100.0, -hrv_percent_change))
+            stress_label = f"{stress_pct:.0f}%"
         else:
-            # Fallback range when no calibration baseline exists yet.
-            hrv_percent_change = max(0.0, min(100.0, ((rmssd - 20.0) / 60.0) * 100.0))
-            stress_pct = 100.0 - hrv_percent_change
+            # Without baseline there is no valid RMSSD percent change for stress.
+            hrv_percent_change = 0.0
+            stress_pct = 0.0
+            stress_label = "—"
 
-        self._stress_gauge.set_value(stress_pct / 100.0, f"{stress_pct:.0f}%")
+        self._stress_gauge.set_value(stress_pct / 100.0, stress_label)
         self._cam_stress_bar.set_value(stress_pct / 100.0)
-        self._cam_stress_value.setText(f"{stress_pct:.0f}%")
+        self._cam_stress_value.setText(stress_label)
 
-        # Feed timeline using percent change from baseline mean.
-        self._timeline_chart.append("HRV", timestamp, hrv_percent_change)
+        # Feed timeline with visual stress-aligned HRV delta:
+        # RMSSD drops (negative physiological delta) should move upward.
+        hrv_visual_delta_pct = -hrv_percent_change
+        self._timeline_chart.append("HRV", timestamp, hrv_visual_delta_pct)
+
+        # Debug mapping check (throttled): RMSSD -> delta% -> stress donut.
+        if timestamp - self._last_stress_debug_log_ts >= 1.0:
+            self._last_stress_debug_log_ts = timestamp
+            logger.debug(
+                "Stress mapping | rmssd=%.2f ms baseline=%.2f ms phys_delta=%.2f%% "
+                "timeline_delta=%.2f%% donut=%.2f (%s)",
+                rmssd,
+                baseline_rmssd,
+                hrv_percent_change,
+                hrv_visual_delta_pct,
+                stress_pct / 100.0,
+                stress_label,
+            )
 
     @pyqtSlot(float, float)
     def on_pdi_updated(self, pdi: float, timestamp: float) -> None:
@@ -954,7 +977,7 @@ class LiveView(QWidget):
                     self._session_manager.set_pupil_baseline(float(baseline_px))
                     self._has_pupil_baseline = True
                     self._pupil_card.set_unit("%")
-                    logger.info("LiveView bootstrap pupil baseline set to %.3f px", baseline_px)
+                    logger.debug("LiveView bootstrap pupil baseline set to %.3f px", baseline_px)
             return
 
         # With baseline: pdi is ratio, convert to percent for display and chart.
@@ -987,7 +1010,7 @@ class LiveView(QWidget):
         self._baseline_pupil_px = float(baseline_pupil_px or 0.0)
         self._has_pupil_baseline = baseline_pupil_px > 0.0
         self._pupil_card.set_unit("%")
-        logger.info(
+        logger.debug(
             "LiveView: calibration complete — pupil baseline %.2f px (has_baseline=%s).",
             baseline_pupil_px, self._has_pupil_baseline,
         )
@@ -1003,15 +1026,12 @@ class LiveView(QWidget):
         _ = (cli, timestamp)
 
     @pyqtSlot(float, float)
-    def on_bpm_updated(self, bpm: float, _timestamp: float) -> None:
-        """Receive instantaneous BPM and update the heart rate card.
-
-        Args:
-            bpm: Beats per minute derived from the latest RR interval.
-            _timestamp: Unix timestamp (unused in the display layer).
-        """
-        self._bpm_card.set_value(bpm, _timestamp)
-        self._cam_bpm_lbl.setText(f"{bpm:.0f}")
+    def on_bpm_updated(self, bpm: float, timestamp: float) -> None:
+        """Receive instantaneous BPM and update the heart rate card (smoothed)."""
+        self._bpm_buffer.append(bpm)
+        smooth_bpm = statistics.median(self._bpm_buffer) if self._bpm_buffer else bpm
+        self._bpm_card.set_value(smooth_bpm, timestamp)
+        self._cam_bpm_lbl.setText(f"{smooth_bpm:.0f}")
 
     @pyqtSlot(int)
     def on_error_count_updated(self, count: int) -> None:
@@ -1077,7 +1097,7 @@ class LiveView(QWidget):
         self._recording_path = str(output_path.absolute())
 
         if self._video_feed.start_recording(self._recording_path):
-            logger.info("Video recording started automatically: %s", self._recording_path)
+            logger.debug("Video recording started automatically: %s", self._recording_path)
         else:
             self._recording_path = None
             logger.warning("Could not start automatic video recording.")
@@ -1092,7 +1112,7 @@ class LiveView(QWidget):
         if self._video_feed.is_recording:
             self._video_feed.stop_recording()
             path = self._recording_path
-            logger.info("Video recording stopped: %s", path)
+            logger.debug("Video recording stopped: %s", path)
 
         self._recording_path = None
         return path

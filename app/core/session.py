@@ -26,7 +26,7 @@ from app.core.data_store import DataStore
 from app.core.metrics import average_pupil_diameter
 from app.hardware.disabled_sensors import DisabledECGSensor, DisabledEyeTracker
 from app.hardware.error_counter import ErrorCounter
-from app.processing.hrv_processor import HRVProcessor, compute_window_hrv_dict
+from app.processing.hrv_processor import HRVProcessor
 from app.utils.config import (
     USE_PICO_ECG,
     USE_EYE_TRACKER,
@@ -120,6 +120,7 @@ class SessionManager(QObject):
         self._cal_rmssd_values: deque[float] = deque()
         self._cal_pupils: deque[float] = deque()       # avg diameters in pixels
         self._cal_duration: int = 0
+        self._cal_start_time: float = 0.0
 
         # ── Baselines (set after calibration) ─────────────────────────
         self._baseline_rmssd:     float = 0.0
@@ -175,11 +176,11 @@ class SessionManager(QObject):
 
         # Processors → DataStore (in-session sample recording)
         self._hrv_proc.hrv_updated.connect(self._store_hrv)
+        self._hrv_proc.hrv_updated.connect(self._forward_bpm)  # Forward BPM to UI
         self._pupil_proc.pdi_updated.connect(self._store_pdi)
         self._cli_proc.cli_updated.connect(self._store_cli)
 
-        # HRV processor → BPM forwarding (always, regardless of session state)
-        self._hrv_proc.hrv_updated.connect(self._forward_bpm)
+
 
         # Sensor connection status → public signals
         self._hrv_sensor.connection_status_changed.connect(self.hrv_connection_changed)
@@ -213,10 +214,11 @@ class SessionManager(QObject):
                 self._cal_pupils.append(avg)
 
     @pyqtSlot(float, float)
-    def _on_cal_rmssd(self, rmssd: float, _timestamp: float) -> None:
+    def _on_cal_rmssd(self, rmssd: float, timestamp: float) -> None:
         """Accumulate rolling RMSSD values during calibration."""
         if self._state == SessionState.CALIBRATING and rmssd > 0.0:
-            self._cal_rmssd_values.append(rmssd)
+            if timestamp - self._cal_start_time >= 10.0:
+                self._cal_rmssd_values.append(rmssd)
 
     # ------------------------------------------------------------------
     # DataStore write slots (active during RUNNING state only)
@@ -316,11 +318,12 @@ class SessionManager(QObject):
         self._cal_rmssd_values.clear()
         self._cal_pupils.clear()
         self._state = SessionState.CALIBRATING
+        self._cal_start_time = time.time()
 
         self._hrv_sensor.start()
         if USE_EYE_TRACKER:
             self._eye_tracker.start()
-        logger.info("Calibration baseline recording started.")
+        logger.debug("Calibration baseline recording started.")
 
     def end_calibration(self, duration_seconds: int) -> tuple[float, float]:
         """Stop sensors, compute baselines from accumulated data, and persist.
@@ -343,39 +346,20 @@ class SessionManager(QObject):
         if USE_EYE_TRACKER:
             self._eye_tracker.stop()
 
-        # Compute baselines (RMSSD from full calibration ECG via neurokit2).
+        # Compute baselines (median of rolling window RMSSDs after warmup).
         ecg_arr = np.array(self._cal_ecg_samples, dtype=float)
         rmssd_array = np.array(list(self._cal_rmssd_values), dtype=float)
         pupil_array = np.array(list(self._cal_pupils), dtype=float)
         min_ecg_samples = int(CALIBRATION_MIN_ECG_SECONDS * PICO_ECG_SAMPLE_RATE_HZ)
         ecg_ok = len(ecg_arr) >= min_ecg_samples
         if duration_seconds >= get_calibration_duration() and ecg_ok:
-            nk_result = compute_window_hrv_dict(ecg_arr, PICO_ECG_SAMPLE_RATE_HZ)
-            if nk_result.get("status") == "ok":
-                self._baseline_rmssd = float(nk_result["rmssd_ms"])
-                if rmssd_array.size > 1:
-                    self._baseline_rmssd_std = float(np.std(rmssd_array, ddof=1))
-                elif rmssd_array.size == 1:
-                    self._baseline_rmssd_std = 0.0
-                else:
-                    self._baseline_rmssd_std = 0.0
-            elif rmssd_array.size > 0:
-                self._baseline_rmssd = float(np.mean(rmssd_array))
-                self._baseline_rmssd_std = (
-                    float(np.std(rmssd_array, ddof=1)) if rmssd_array.size > 1 else 0.0
-                )
-                logger.warning(
-                    "Calibration RMSSD from rolling updates only (neurokit2 full-ECG status=%s).",
-                    nk_result.get("status"),
-                )
+            if rmssd_array.size > 0:
+                self._baseline_rmssd = float(np.median(rmssd_array))
+                self._baseline_rmssd_std = float(np.std(rmssd_array, ddof=1)) if rmssd_array.size > 1 else 0.0
             else:
                 self._baseline_rmssd = 0.0
                 self._baseline_rmssd_std = 0.0
-                logger.warning(
-                    "Calibration RMSSD baseline rejected: neurokit2 status=%s on %d ECG samples.",
-                    nk_result.get("status"),
-                    len(ecg_arr),
-                )
+                logger.warning("Calibration RMSSD baseline rejected: no valid rolling windows after 10s warmup.")
         else:
             self._baseline_rmssd = 0.0
             self._baseline_rmssd_std = 0.0
@@ -404,7 +388,7 @@ class SessionManager(QObject):
         self._data_store.baseline_pupil_px_std = self._baseline_pupil_std
 
         self._state = SessionState.READY
-        logger.info(
+        logger.debug(
             "Calibration complete: RMSSD=%.2f±%.2f ms, pupil=%.3f±%.3f px (n_ecg=%d, n_rmssd_win=%d, n_pupils=%d)",
             self._baseline_rmssd,
             self._baseline_rmssd_std,
@@ -453,7 +437,7 @@ class SessionManager(QObject):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._session_dir = Path(SESSIONS_DIR) / f"session_{self._session_id}_{ts}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Session directory created: %s", self._session_dir)
+        logger.debug("Session directory created: %s", self._session_dir)
 
         # Persist calibration baseline if we have one.
         if self._baseline_rmssd > 0.0 or self._baseline_pupil_px > 0.0:
@@ -466,6 +450,8 @@ class SessionManager(QObject):
                 duration_seconds=self._cal_duration,
             )
 
+
+
         self._session_start_time = time.time()
         self._state = SessionState.RUNNING
 
@@ -474,7 +460,7 @@ class SessionManager(QObject):
             self._eye_tracker.start()
 
         self.session_started.emit(self._session_id)
-        logger.info("Session %d started (state=RUNNING).", self._session_id)
+        logger.debug("Session %d started (state=RUNNING).", self._session_id)
         return self._session_id
 
     def pause_session(self) -> None:
@@ -482,14 +468,14 @@ class SessionManager(QObject):
         if self._state == SessionState.RUNNING:
             self._state = SessionState.PAUSED
             self.session_paused.emit(self._session_id)
-            logger.info("Session %d paused.", self._session_id)
+            logger.debug("Session %d paused.", self._session_id)
 
     def resume_session(self) -> None:
         """Continue data recording and clock (state: RUNNING)."""
         if self._state == SessionState.PAUSED:
             self._state = SessionState.RUNNING
             self.session_resumed.emit(self._session_id)
-            logger.info("Session %d resumed.", self._session_id)
+            logger.debug("Session %d resumed.", self._session_id)
 
     def set_recording_path(self, path: str | None) -> None:
         """Store the filesystem path of the video recording for this session.
@@ -534,9 +520,11 @@ class SessionManager(QObject):
             excel_path = self._session_dir / f"session_{self._session_id}.xlsx"
             try:
                 self._exporter.export_excel(self._session_id, excel_path)
-                logger.info("Automatic session export completed: %s", excel_path)
+                logger.debug("Automatic session export completed: %s", excel_path)
             except Exception as e:
                 logger.error("Failed to automatically export session %d: %s", self._session_id, e)
+
+
 
         finished_id = self._session_id
         self._session_id = None
@@ -544,7 +532,7 @@ class SessionManager(QObject):
         self._state = SessionState.IDLE
 
         self.session_ended.emit(finished_id)
-        logger.info("Session %d ended and persisted.", finished_id)
+        logger.debug("Session %d ended and persisted.", finished_id)
 
     def _persist_samples(self) -> None:
         """Bulk-write all DataStore samples to the database."""
@@ -567,7 +555,7 @@ class SessionManager(QObject):
         if cli:
             self._cal_repo.save_cli_samples_bulk(sid, cli)
 
-        logger.info(
+        logger.debug(
             "Persisted sample bulk: %d HRV, %d pupil, %d CLI for session %d.",
             len(hrv), len(pupil), len(cli), sid,
         )

@@ -105,7 +105,7 @@ class _DataManagementCard(QFrame):
         input_row.setSpacing(SPACE_2)
 
         self._cal_spin = QSpinBox()
-        self._cal_spin.setRange(5, 300)
+        self._cal_spin.setRange(60, 300)
         self._cal_spin.setValue(get_calibration_duration())
         self._cal_spin.setSuffix(" seconds")
         self._cal_spin.setMinimumHeight(40)

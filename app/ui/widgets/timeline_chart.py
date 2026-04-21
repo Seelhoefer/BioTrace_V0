@@ -5,9 +5,9 @@ on a unified ``% Change from Baseline`` Y axis.
 
 Both series are normalised before plotting:
 
-- **Stress (RMSSD)**: ``(rmssd − baseline_rmssd) / baseline_rmssd × 100``
-  Positive values = RMSSD above baseline (lower stress).
-  Negative values = RMSSD below baseline (higher stress).
+- **Stress (RMSSD)**: ``-((rmssd − baseline_rmssd) / baseline_rmssd × 100)``
+    RMSSD drops below baseline therefore move upward in the chart.
+    This keeps directional comparability with pupil-dilation delta percent.
 
 - **Pupil Dilation (PDI)**: ``pdi × 100``
   PDI is already ``(diameter − baseline) / baseline``, so multiplying by 100
@@ -65,7 +65,8 @@ class TimelineChart(QWidget):
     ) -> None:
         """Query the database and plot normalised series for the given session.
 
-        RMSSD is expressed as percent change from the calibration baseline.
+        RMSSD is expressed as an inverted percent change from the calibration
+        baseline so stress-relevant drops go up in the plot.
         PDI is expressed as percent change (pdi × 100) — it is already a
         fractional deviation from the resting pupil diameter.
 
@@ -85,7 +86,7 @@ class TimelineChart(QWidget):
         ).fetchone()
         baseline_rmssd: float | None = float(cal_row[0]) if cal_row else None
 
-        # ── Stress (RMSSD) as % change from baseline ──────────────────
+        # ── Stress (RMSSD) as inverted % change from baseline ─────────
         hrv_rows = conn.execute(
             "SELECT timestamp, rmssd FROM hrv_samples "
             "WHERE session_id = ? AND rmssd IS NOT NULL ORDER BY timestamp",
@@ -103,7 +104,8 @@ class TimelineChart(QWidget):
             )
             if ref and ref > 0:
                 stress_x = [float(r["timestamp"]) for r in hrv_rows]
-                stress_y = [(v - ref) / ref * 100.0 for v in rmssd_vals]
+                # Invert sign so RMSSD drops (stress increase) trend upward.
+                stress_y = [-(v - ref) / ref * 100.0 for v in rmssd_vals]
 
         # ── Pupil Dilation (PDI) as % change ─────────────────────────
         pupil_rows = conn.execute(

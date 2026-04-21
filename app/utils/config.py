@@ -53,8 +53,8 @@ PICO_ECG_SAMPLE_RATE_HZ: int = 150
 # ---------------------------------------------------------------------------
 
 # Raw ECG ring buffer length and neurokit2 re-analysis cadence.
-HRV_ECG_WINDOW_SEC: int = 30
-HRV_ECG_UPDATE_SEC: int = 5
+HRV_ECG_WINDOW_SEC: int = 10
+HRV_ECG_UPDATE_SEC: int = 0.5
 
 # Shared window/update for StressProcessor (same physical buffer contract).
 STRESS_NK_WINDOW_SEC: int = HRV_ECG_WINDOW_SEC
@@ -69,13 +69,13 @@ STRESS_RMSSD_PCT_STABLE_THRESHOLD: float = -10.0
 STRESS_RMSSD_PCT_MILD_THRESHOLD: float = -40.0
 
 # Minimum buffered ECG duration (seconds) before the first neurokit2 analysis.
-HRV_ECG_MIN_WINDOW_SEC: float = 10.0
+HRV_ECG_MIN_WINDOW_SEC: float = 2
 
 # RR artefact handling after R-peak detection (milliseconds / fractions).
 HRV_RR_PHYS_MIN_MS: float = 300.0   # > 200 BPM rejected
 HRV_RR_PHYS_MAX_MS: float = 2000.0  # < 30 BPM rejected
-HRV_RR_MEDIAN_DEV_FRAC: float = 0.20  # ectopic: replace if |RR − med| > 20% of local median
-HRV_RR_ROLLING_HALF_WIDTH: int = 3    # median window = 2 * half_width + 1 beats
+HRV_RR_MEDIAN_DEV_FRAC: float = 0.15  # ectopic: replace if |RR − med| > 15% of local median
+HRV_RR_ROLLING_HALF_WIDTH: int = 2    # median window = 2 * half_width + 1 beats
 
 # RMSSD sliding window duration (seconds) — legacy name; matches HRV_ECG_WINDOW_SEC.
 RMSSD_WINDOW_SECONDS: int = 30
@@ -98,7 +98,7 @@ PUPIL_BLINK_VELOCITY_THRESHOLD_PX: float = 20.0
 PUPIL_PDI_OUTLIER_CLAMP: float = 0.40
 
 # Calibration baseline recording duration (seconds).
-CALIBRATION_DURATION_SECONDS: int = 20
+CALIBRATION_DURATION_SECONDS: int = 60
 
 # Minimum RR intervals required for accepting an RMSSD calibration baseline.
 # For a 20 s window this should stay lenient enough for normal resting HR.
@@ -175,7 +175,8 @@ def get_calibration_duration() -> int:
     # Cast to int because QSettings might return a string or None
     val = settings.value("calibration_duration", CALIBRATION_DURATION_SECONDS)
     try:
-        return int(val)
+        # Enforce at least the project baseline duration (60s).
+        return max(CALIBRATION_DURATION_SECONDS, int(val))
     except (ValueError, TypeError):
         return CALIBRATION_DURATION_SECONDS
 

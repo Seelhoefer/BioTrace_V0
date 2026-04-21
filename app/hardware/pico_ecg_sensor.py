@@ -233,12 +233,13 @@ def _parse_yeda_value(line: str) -> float | None:
     if not match:
         return None
     try:
-        reciprocal_value = float(match.group(1))
+        value = float(match.group(1))
     except ValueError:
         return None
-    if reciprocal_value == 0.0:
-        return None
-    return 1.0 / reciprocal_value
+    # if value == 0.0:
+    #     return None
+    # return 1.0 / value          # <<< REMOVE OR COMMENT
+    return value                  # <<< JUST RETURN RAW COUNT
 
 
 def _parse_moi_values(line: str) -> dict[str, float]:

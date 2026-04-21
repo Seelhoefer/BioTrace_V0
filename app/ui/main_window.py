@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpacerItem,
     QStackedWidget,
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
 
         # ── Infrastructure (created before views) ──────────────────────
         self._db = DatabaseManager()
+        
         self._session_manager = SessionManager(self._db, parent=self)
         self._cleanup_done = False
 
@@ -227,22 +229,32 @@ class MainWindow(QMainWindow):
             layout.addWidget(btn)
             self._nav_buttons.append(btn)
 
-        # Recent sessions area
+        # Session history area (scrollable, all sessions)
         layout.addSpacing(24)
-        recent_label = QLabel("RECENT SESSIONS")
+        recent_label = QLabel("SESSION HISTORY")
         recent_label.setObjectName("sidebar_section_label")
         recent_label.setStyleSheet(f"color: {COLOR_FONT_MUTED}; font-size: {FONT_CAPTION}px; font-weight: 700; padding: 0px 12px 8px 12px; letter-spacing: 1px;")
         layout.addWidget(recent_label)
 
-        self._recent_sessions_layout = QVBoxLayout()
+        sessions_container = QWidget()
+        sessions_container.setStyleSheet("background: transparent;")
+        self._recent_sessions_layout = QVBoxLayout(sessions_container)
         self._recent_sessions_layout.setSpacing(8)
-        layout.addLayout(self._recent_sessions_layout)
+        self._recent_sessions_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._sessions_scroll = QScrollArea()
+        self._sessions_scroll.setWidget(sessions_container)
+        self._sessions_scroll.setWidgetResizable(True)
+        self._sessions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sessions_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { width: 4px; background: transparent; }"
+            "QScrollBar::handle:vertical { background: rgba(0,0,0,0.18); border-radius: 2px; min-height: 20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        )
+        layout.addWidget(self._sessions_scroll, 1)
 
         self._populate_recent_sessions()
-
-        layout.addSpacerItem(
-            QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-        )
 
         # Settings and Log out nav
         layout.addSpacing(16)
@@ -288,7 +300,7 @@ class MainWindow(QMainWindow):
             self._recent_sessions_layout.addWidget(empty_lbl)
             return
 
-        for i, session in enumerate(sessions[:5]):  # Top 5
+        for i, session in enumerate(sessions):
             name = session["name"]
             if name:
                 label = name
@@ -316,6 +328,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_stack") and hasattr(self, "_post_session_view"):
                 if self._stack.currentIndex() == 4 and self._post_session_view._session_id == session["id"]:
                     btn.setChecked(True)
+
+        self._recent_sessions_layout.addStretch()
 
     # ------------------------------------------------------------------
     # Navigation

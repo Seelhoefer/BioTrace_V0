@@ -117,7 +117,7 @@ def compute_window_hrv_dict(
         _signals, info = nk.ecg_process(
             ecg,
             sampling_rate=sampling_rate,
-            method="pantompkins1985",
+            method="neurokit",
         )
         r_peaks = np.asarray(info["ECG_R_Peaks"], dtype=int)
     except Exception as exc:  # noqa: BLE001
@@ -215,8 +215,16 @@ class HRVProcessor(QObject):
         ts = time.time()
         status = result.get("status", "error")
         if status != "ok":
-            logger.debug("HRV window skipped: %s", result)
+            logger.info("HRV window: status=%s n_samples=%d", status, ecg.size)
             return result
+
+        logger.info(
+            "HRV window: status=ok n_peaks=%d bpm=%.1f rr_median=%.1f rmssd=%.1f",
+            int(result["n_peaks"]),
+            float(result["bpm"]),
+            float(result["rr_median_ms"]),
+            float(result["rmssd_ms"]),
+        )
 
         rmssd = float(result["rmssd_ms"])
         ln_rmssd = float(result["ln_rmssd"])
